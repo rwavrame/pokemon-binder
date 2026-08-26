@@ -22,7 +22,11 @@ const ALLOWED = new Set([
   'levelupgames.ca',
   'exorgames.com',
   'chimeragamingonline.com',
-  'obsidiangames.ca'
+  'obsidiangames.ca',
+  'facetofacegames.com',
+  'hobbiesville.com',
+  'houseofcards.ca',
+  'deckoutgaming.ca'
 ]);
 
 const MAX_DEEP = 3;          // products per store we'll pull variants for
@@ -47,10 +51,17 @@ async function grab(url) {
 }
 
 /* Cheap pre-filter so we only spend a second request on plausible products. This is
- * cost control, NOT the authoritative match — the client still matches properly. */
+ * cost control, NOT the authoritative match — the client still matches properly.
+ *
+ * The total is optional: Deck Out Gaming writes "Slowpoke (81)" with no total at all,
+ * so insisting on "81/123" here meant none of its products were ever deep-fetched and
+ * it could only ever return coarse product-level stock. A few extra candidates are
+ * cheap — MAX_DEEP caps the cost and the client throws out the wrong ones. */
 const numRe = (num, tot) => {
-  const n = String(num).replace(/^0+/, ''), t = String(tot).replace(/^0+/, '');
-  return new RegExp(`(?:^|[^\\d/])0*${n}\\s*/\\s*0*${t}(?![\\d/])`);
+  const n = String(num).replace(/^0+/, ''), t = String(tot || '').replace(/^0+/, '');
+  const bare = `(?:^|[^A-Za-z\\d/])0*${n}(?![\\d])`;
+  return t ? new RegExp(`${bare}|(?:^|[^\\d/])0*${n}\\s*/\\s*0*${t}(?![\\d/])`)
+           : new RegExp(bare);
 };
 
 export default async (req) => {
@@ -91,7 +102,7 @@ export default async (req) => {
   }));
 
   // second hop: variant-level stock for the products that could be this card
-  if (num && tot) {
+  if (num) {
     const re = numRe(num, tot);
     const deep = slim.filter((s) => re.test(s.title) && s.handle).slice(0, MAX_DEEP);
     await Promise.all(deep.map(async (s) => {
