@@ -1,0 +1,6 @@
+[build]
+  publish = "binder-site"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"

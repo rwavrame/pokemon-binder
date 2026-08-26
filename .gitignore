@@ -1,0 +1,10 @@
+# Netlify CLI local state (contains site linkage, not needed in git)
+.netlify/
+
+# macOS
+.DS_Store
+
+# Never commit secrets
+.env
+.env.*
+!.env.example
