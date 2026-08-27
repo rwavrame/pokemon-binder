@@ -715,6 +715,7 @@ function renderBinder(){
     }
   });
   document.getElementById('binder').innerHTML=html;
+  document.querySelectorAll('#binder .stockbtn').forEach(b=>refreshStockBtn(+b.dataset.pi,b));
 }
 function pageHtml(items,no,label){
   const real=items.filter(i=>!i.addSlot);
@@ -727,8 +728,8 @@ function pageHtml(items,no,label){
   return `<div class="binder-page"><div class="page-label">
      <h3>Page ${no} — ${label}</h3>
      <div class="range">${range}</div>
-     ${canCheck?`<button class="stockbtn" onclick="checkPageStock(${pi},this)"
-        title="Look this page's missing cards up at five Canadian stores">Check stock</button>`:''}</div>
+     ${canCheck?`<button class="stockbtn" data-pi="${pi}"
+        onclick="checkPageStock(${pi},this,event.shiftKey)">Check stock</button>`:''}</div>
      <div class="card-grid">${cells}</div></div>`;
 }
 function pocketHtml(p){
@@ -1083,11 +1084,27 @@ let PAGE_INDEX=[];              // rebuilt every render; index → the page's po
 let stockRun=null;              // AbortController for the check in flight
 function abortStock(){ if(stockRun){ stockRun.abort(); stockRun=null; } }
 
-async function checkPageStock(pi,btn){
+/* how stale this page's cached answers are, in minutes (null = nothing cached) */
+function pageStockAge(pi){
+  const items=(PAGE_INDEX[pi]||[]).filter(p=>!p.custom && statusOf(p.key)==='');
+  let oldest=null;
+  items.forEach(p=>{ const e=stockGet(p.c); if(e && (oldest===null||e.t<oldest)) oldest=e.t; });
+  return oldest===null?null:Math.round((Date.now()-oldest)/60000);
+}
+function ageLabel(m){
+  if(m===null) return '';
+  return m<1?'just now' : m<60?m+' min ago' : Math.round(m/60)+'h ago';
+}
+/* Shop stock moves day to day, so the 24h cache must never be a dead end. If every
+   card on the page is already cached the button re-checks them all instead of
+   refusing; shift-click forces a refresh even when some are still uncached. */
+async function checkPageStock(pi,btn,force){
   const items=PAGE_INDEX[pi]||[];
-  const todo=items.filter(p=>!p.custom && statusOf(p.key)==='' && !stockGet(p.c));
-  const cards=[...new Map(todo.map(p=>[stockId(p.c),p.c])).values()];   // one fetch per card
-  if(!cards.length){ paintStock(); toast('Nothing to check on this page — already cached or owned.'); return; }
+  const live=items.filter(p=>!p.custom && statusOf(p.key)==='');
+  const fresh=live.filter(p=>!stockGet(p.c));
+  const pick=(force||!fresh.length)?live:fresh;
+  const cards=[...new Map(pick.map(p=>[stockId(p.c),p.c])).values()];   // one fetch per card
+  if(!cards.length){ paintStock(); toast('Nothing to check here — every card on this page is owned or ordered.'); return; }
   abortStock();
   const ac=new AbortController(); stockRun=ac;
   btn.disabled=true;
@@ -1106,8 +1123,18 @@ async function checkPageStock(pi,btn){
   if(!ac.signal.aborted) accs.forEach((v,k)=>{ stockCache[k]=v; });
   if(ac.signal.aborted) return;
   stockRun=null; stockSave(); btn.disabled=false;
-  btn.textContent='Check stock';
-  paintStock();
+  paintStock(); refreshStockBtn(pi,btn);
+  toast(`Stock updated for ${cards.length} card${cards.length===1?'':'s'} on this page.`);
+}
+/* the button says what it will actually do, and how stale the page is */
+function refreshStockBtn(pi,btn){
+  if(!btn) return;
+  const age=pageStockAge(pi);
+  const anyNew=(PAGE_INDEX[pi]||[]).some(p=>!p.custom&&statusOf(p.key)===''&&!stockGet(p.c));
+  btn.textContent = anyNew ? 'Check stock' : `Re-check · ${ageLabel(age)}`;
+  btn.title = anyNew
+    ? "Look this page's missing cards up at nine Canadian stores"
+    : `Checked ${ageLabel(age)}. Click to fetch fresh stock — shop inventory changes daily. Shift-click always forces a full refresh.`;
 }
 
 /* Cheapest first, NM ahead of played at the same price. Any condition counts as in
@@ -1159,6 +1186,21 @@ function paintStock(){
   });
 }
 
+/* Re-check a single card from its detail panel — one card across nine stores. */
+async function recheckCard(key,btn){
+  const p=pockets(curTab).find(x=>x.key===key); if(!p||p.custom) return;
+  btn.disabled=true; btn.textContent='↻ Checking…';
+  abortStock();
+  const ac=new AbortController(); stockRun=ac;
+  const acc={t:Date.now(),hits:[],failed:[]};
+  const jobs=STORES.map(st=>async()=>stockLookupOne(p.c,st,acc,ac.signal));
+  await runQueue(jobs,STOCK_MAX_INFLIGHT);
+  if(ac.signal.aborted) return;
+  stockRun=null; stockCache[stockId(p.c)]=acc; stockSave();
+  paintStock(); showCard(key);          // re-render the panel with the fresh answer
+  document.querySelectorAll('#binder .stockbtn').forEach(b=>refreshStockBtn(+b.dataset.pi,b));
+}
+
 /* Bulk hand-off. Snapcaster's own Multi Search takes a pasted list — 10 names on a
    free account, 100 with Pro — so copy that many and let it do the search there. */
 function multiSearch(){
@@ -1193,12 +1235,12 @@ function stockDetailHtml(p){
       <span class="what"><a href="${h.url}" target="_blank" rel="noopener" style="color:#8ab4ff;text-decoration:none">${h.title}</a>${h.variant?` <i style="color:#67759c">· ${h.variant}</i>`:''}${h.approx?' <i style="color:#a0a0b8">(product level)</i>':''}</span>
       <span class="amt">${h.available?'in stock':'sold out'}${h.qty!=null?' ×'+h.qty:''}${h.price!=null?' · $'+h.price.toFixed(2):''}</span></div>`).join('');
   }).join('');
-  const age=Math.round((Date.now()-e.t)/60000);
+  const age=Math.round((Date.now()-e.t)/60000);   // ageLabel() renders it
   return `<div class="stock-list"><h4>Canadian stock</h4>
     ${rows||'<div style="color:#8fa0c8;font-size:12px">No listing found at the five checked stores. That is <b>not</b> the same as sold out — try Snapcaster for the other 75+.</div>'}
     ${e.failed&&e.failed.length?`<div style="color:#a0a0b8;font-size:11px;margin-top:6px">Could not reach: ${e.failed.join(', ')}</div>`:''}
-    <div style="color:#667;font-size:11px;margin-top:6px">Checked ${age<1?'just now':age+' min ago'} · prices are the stores' own CAD</div>
-    <div class="acts" style="margin-top:8px">${snap}</div></div>`;
+    <div style="color:#667;font-size:11px;margin-top:6px">Checked ${ageLabel(age)} · prices are the stores' own CAD</div>
+    <div class="acts" style="margin-top:8px"><button onclick="recheckCard('${p.key}',this)">↻ Re-check now</button>${snap}</div></div>`;
 }
 
 /* custom pockets */
@@ -1266,7 +1308,7 @@ function renderNotes(){
     <li><b>Every printing gets its own pocket.</b> A card that came in normal and reverse holo takes two pockets, side by side, in that order.</li>
     <li><b>"1 per card" mode</b> (toolbar) collapses that down to <b>one pocket per card — one of each unique artwork</b>. Reverse holos, 1st Edition/Unlimited pairs, cosmos and ball reverses, prerelease and STAFF stamps all fold away, leaving the base print: a plain normal where one exists, otherwise the holo, otherwise the Unlimited run. Cards that are genuinely different artwork stay separate — both Vivillon wing patterns, every Mew ex, the MEP promos. Nothing is deleted; owned marks on the hidden printings are still there when you switch back.</li>
     <li><b>Click a pocket</b> to cycle Missing → 📦 Ordered → ✅ Owned. <b>Right-click</b> opens full card details and a TCGplayer search link.</li>
-    <li><b>Canadian stock.</b> Each binder page has a <b>Check stock</b> button that looks its missing cards up at nine Canadian stores — <b>401 Games, Level Up, Exor, Chimera, Obsidian, Face to Face, Hobbiesville, House of Cards and Deck Out</b> — and prints the result under each card. Those prices are the stores' <b>real CAD shelf prices</b>, unlike the pocket price, which is a TCGplayer <i>US</i> market figure converted at the rate in the toolbar. Answers are cached for <b>24 hours</b>, so re-checking a page is free but a figure can be a day stale. Three results mean different things: <b>✅ in stock</b>, <b>⚠️ listed, sold out</b> (they carry it, they're out — worth watching, and a real price signal) and <b>— not listed</b>, which is <i>not</i> the same as sold out. <b>The badge is per printing, not per card.</b> A Reverse Holo pocket reports <i>reverse holo</i> stock and price and never borrows the normal print's — Slowpoke HGSS 81/123 reads <b>RH in stock — Exor $41.95 (LP)</b> on the reverse pocket and <b>in stock — 401 Games $4.88 (MP)</b> on the normal one, from the same lookup. Every store writes its listings differently — most bury the printing in the Shopify variant ("Lightly Played Reverse Holofoil"), 401 Games and Deck Out split it into a separate product, Hobbiesville hides it in the product's web address, and Face to Face helpfully stamps the card's catalogue id right in the title. 401 Games is the only one that publishes real stock counts. <b>Any condition counts as in stock</b> and the badge names it — vintage reverse holos are scarce enough that an LP copy is usually the only copy. When your printing is gone but another one is on a shelf, a muted second line says so rather than the badge pretending the card is available. Chimera's <b>Non English</b> variants are excluded throughout, and in EX-era sets a listing marked <b>(Stamped)</b> counts as the reverse holo, because there the reverse foil pattern <i>is</i> the set stamp. Right-click any pocket for the full per-store, per-condition breakdown grouped by printing. The <b>🔎 Snapcaster</b> link on every pocket searches 80+ Canadian stores instead of five, and <b>🔎 Multi Search</b> in the toolbar copies up to 10 missing card names for Snapcaster's bulk search.</li>
+    <li><b>Canadian stock.</b> Each binder page has a <b>Check stock</b> button that looks its missing cards up at nine Canadian stores — <b>401 Games, Level Up, Exor, Chimera, Obsidian, Face to Face, Hobbiesville, House of Cards and Deck Out</b> — and prints the result under each card. Those prices are the stores' <b>real CAD shelf prices</b>, unlike the pocket price, which is a TCGplayer <i>US</i> market figure converted at the rate in the toolbar. Answers are cached for <b>24 hours</b>. Shop stock moves day to day, so the cache is never a dead end: once a page is fully cached its button becomes <b>Re-check · 3h ago</b> and fetches fresh figures on click, <b>shift-click</b> forces a full refresh at any time, and a card's detail panel has its own <b>↻ Re-check now</b>. Three results mean different things: <b>✅ in stock</b>, <b>⚠️ listed, sold out</b> (they carry it, they're out — worth watching, and a real price signal) and <b>— not listed</b>, which is <i>not</i> the same as sold out. <b>The badge is per printing, not per card.</b> A Reverse Holo pocket reports <i>reverse holo</i> stock and price and never borrows the normal print's — Slowpoke HGSS 81/123 reads <b>RH in stock — Exor $41.95 (LP)</b> on the reverse pocket and <b>in stock — 401 Games $4.88 (MP)</b> on the normal one, from the same lookup. Every store writes its listings differently — most bury the printing in the Shopify variant ("Lightly Played Reverse Holofoil"), 401 Games and Deck Out split it into a separate product, Hobbiesville hides it in the product's web address, and Face to Face helpfully stamps the card's catalogue id right in the title. 401 Games is the only one that publishes real stock counts. <b>Any condition counts as in stock</b> and the badge names it — vintage reverse holos are scarce enough that an LP copy is usually the only copy. When your printing is gone but another one is on a shelf, a muted second line says so rather than the badge pretending the card is available. Chimera's <b>Non English</b> variants are excluded throughout, and in EX-era sets a listing marked <b>(Stamped)</b> counts as the reverse holo, because there the reverse foil pattern <i>is</i> the set stamp. Right-click any pocket for the full per-store, per-condition breakdown grouped by printing. The <b>🔎 Snapcaster</b> link on every pocket searches 80+ Canadian stores instead of five, and <b>🔎 Multi Search</b> in the toolbar copies up to 10 missing card names for Snapcaster's bulk search.</li>
     <li>Pages hold ${PAGE} cards (${{4:'2×2',9:'3×3',16:'4×4'}[PAGE]}), switchable in the toolbar. Each Pokémon in the line starts on a fresh page, so nothing straddles a divider. Filters re-flow the pages — clear the filter to see true binder order.</li>
     <li>Order within a section is <b>chronological by set release</b>, then card number — the same order you'd sleeve them.</li>
     <li><b>Prices are shown in Canadian dollars</b> <code>C$</code>. The underlying figures are TCGplayer <b>USD market</b> values captured on the build date, converted at the rate in the toolbar (default <b>1.374</b>, the USD→CAD reference rate on ${FX_DATE}). Change that box any time and every price, the owned total and the cost-to-finish update instantly — the stored data stays in USD, so nothing is lost to rounding. These are US-market comparables converted for reference, <b>not Canadian retail prices</b>; expect local shops and Canadian sellers to differ, and note the underlying figures do not move until the guide is rebuilt.</li>
@@ -1374,7 +1416,7 @@ function artistNotes(tab,ps,uniq){
     <li><b>One pocket per artwork, not per printing.</b> Reverse holos, 1st Edition/Unlimited pairs, cosmos foils and stamps are all <i>the same picture</i>, so they don't get their own pockets here. Buy whichever printing is cheapest. This is baked into the tab — the toolbar's "1 per card" mode makes no difference on it.</li>
     <li><b>Reprints of the same artwork are one pocket too.</b> ${f.mergeEg} ${f.merges} cards fold away this way, and each surviving pocket names its alternates on the "also" line — either printing fills the slot.</li>
     <li><b>Click a pocket</b> to cycle Missing → 📦 Ordered → ✅ Owned. <b>Right-click</b> opens full card details and a TCGplayer search link.</li>
-    <li><b>Canadian stock.</b> Each binder page has a <b>Check stock</b> button that looks its missing cards up at nine Canadian stores — <b>401 Games, Level Up, Exor, Chimera, Obsidian, Face to Face, Hobbiesville, House of Cards and Deck Out</b> — and prints the result under each card. Those prices are the stores' <b>real CAD shelf prices</b>, unlike the pocket price, which is a TCGplayer <i>US</i> market figure converted at the rate in the toolbar. Answers are cached for <b>24 hours</b>, so re-checking a page is free but a figure can be a day stale. Three results mean different things: <b>✅ in stock</b>, <b>⚠️ listed, sold out</b> (they carry it, they're out — worth watching, and a real price signal) and <b>— not listed</b>, which is <i>not</i> the same as sold out. <b>The badge is per printing, not per card.</b> A Reverse Holo pocket reports <i>reverse holo</i> stock and price and never borrows the normal print's — Slowpoke HGSS 81/123 reads <b>RH in stock — Exor $41.95 (LP)</b> on the reverse pocket and <b>in stock — 401 Games $4.88 (MP)</b> on the normal one, from the same lookup. Every store writes its listings differently — most bury the printing in the Shopify variant ("Lightly Played Reverse Holofoil"), 401 Games and Deck Out split it into a separate product, Hobbiesville hides it in the product's web address, and Face to Face helpfully stamps the card's catalogue id right in the title. 401 Games is the only one that publishes real stock counts. <b>Any condition counts as in stock</b> and the badge names it — vintage reverse holos are scarce enough that an LP copy is usually the only copy. When your printing is gone but another one is on a shelf, a muted second line says so rather than the badge pretending the card is available. Chimera's <b>Non English</b> variants are excluded throughout, and in EX-era sets a listing marked <b>(Stamped)</b> counts as the reverse holo, because there the reverse foil pattern <i>is</i> the set stamp. Right-click any pocket for the full per-store, per-condition breakdown grouped by printing. The <b>🔎 Snapcaster</b> link on every pocket searches 80+ Canadian stores instead of five, and <b>🔎 Multi Search</b> in the toolbar copies up to 10 missing card names for Snapcaster's bulk search.</li>
+    <li><b>Canadian stock.</b> Each binder page has a <b>Check stock</b> button that looks its missing cards up at nine Canadian stores — <b>401 Games, Level Up, Exor, Chimera, Obsidian, Face to Face, Hobbiesville, House of Cards and Deck Out</b> — and prints the result under each card. Those prices are the stores' <b>real CAD shelf prices</b>, unlike the pocket price, which is a TCGplayer <i>US</i> market figure converted at the rate in the toolbar. Answers are cached for <b>24 hours</b>. Shop stock moves day to day, so the cache is never a dead end: once a page is fully cached its button becomes <b>Re-check · 3h ago</b> and fetches fresh figures on click, <b>shift-click</b> forces a full refresh at any time, and a card's detail panel has its own <b>↻ Re-check now</b>. Three results mean different things: <b>✅ in stock</b>, <b>⚠️ listed, sold out</b> (they carry it, they're out — worth watching, and a real price signal) and <b>— not listed</b>, which is <i>not</i> the same as sold out. <b>The badge is per printing, not per card.</b> A Reverse Holo pocket reports <i>reverse holo</i> stock and price and never borrows the normal print's — Slowpoke HGSS 81/123 reads <b>RH in stock — Exor $41.95 (LP)</b> on the reverse pocket and <b>in stock — 401 Games $4.88 (MP)</b> on the normal one, from the same lookup. Every store writes its listings differently — most bury the printing in the Shopify variant ("Lightly Played Reverse Holofoil"), 401 Games and Deck Out split it into a separate product, Hobbiesville hides it in the product's web address, and Face to Face helpfully stamps the card's catalogue id right in the title. 401 Games is the only one that publishes real stock counts. <b>Any condition counts as in stock</b> and the badge names it — vintage reverse holos are scarce enough that an LP copy is usually the only copy. When your printing is gone but another one is on a shelf, a muted second line says so rather than the badge pretending the card is available. Chimera's <b>Non English</b> variants are excluded throughout, and in EX-era sets a listing marked <b>(Stamped)</b> counts as the reverse holo, because there the reverse foil pattern <i>is</i> the set stamp. Right-click any pocket for the full per-store, per-condition breakdown grouped by printing. The <b>🔎 Snapcaster</b> link on every pocket searches 80+ Canadian stores instead of five, and <b>🔎 Multi Search</b> in the toolbar copies up to 10 missing card names for Snapcaster's bulk search.</li>
     <li><b>One unbroken run</b>, chronological by set release then card number — no section breaks, so the only blank pockets are the few at the very end. Pages hold ${PAGE} cards (${{4:'2×2',9:'3×3',16:'4×4'}[PAGE]}).</li>
     <li>Prices are the same TCGplayer USD market figures converted to <code>C$</code> as everywhere else — here they're the cheapest listed printing of that artwork, since any printing fills the pocket.</li>
   </ul>
