@@ -32,6 +32,15 @@ const ALLOWED = new Set([
 const MAX_DEEP = 3;          // products per store we'll pull variants for
 const UPSTREAM_TIMEOUT = 8000;
 
+/* This function runs on Netlify's US infrastructure, and four of the nine shops use
+ * Shopify Markets regional pricing — so they geolocated the function and answered in
+ * USD, which the binder then displayed as CAD. House of Cards' Slowbro 117/091 came
+ * back as $20.00 when the shop's own page says $27.20. The mark-ups differ per store
+ * (1.20x, 1.35x, 1.39x observed), so no exchange rate can undo it after the fact;
+ * the country has to be pinned on the request. ?country=CA overrides the geolocation
+ * and is ignored by shops that do not use Markets. */
+const COUNTRY = 'country=CA';
+
 const CORS = {
   'access-control-allow-origin': '*',
   'access-control-allow-methods': 'GET, OPTIONS',
@@ -81,7 +90,8 @@ export default async (req) => {
      listings — the very ones worth knowing about. The other four are unaffected. */
   const searchUrl = `https://${host}/search/suggest.json?q=${encodeURIComponent(q)}` +
                     `&resources%5Btype%5D=product&resources%5Blimit%5D=10` +
-                    `&resources%5Boptions%5D%5Bunavailable_products%5D=show`;
+                    `&resources%5Boptions%5D%5Bunavailable_products%5D=show` +
+                    `&${COUNTRY}`;
 
   let products;
   try {
@@ -107,7 +117,7 @@ export default async (req) => {
     const deep = slim.filter((s) => re.test(s.title) && s.handle).slice(0, MAX_DEEP);
     await Promise.all(deep.map(async (s) => {
       try {
-        const d = await grab(`https://${host}/products/${s.handle}.js`);
+        const d = await grab(`https://${host}/products/${s.handle}.js?${COUNTRY}`);
         s.variants = (d.variants || []).map((v) => ({
           title: String(v.title || ''),
           available: !!v.available,
@@ -118,7 +128,7 @@ export default async (req) => {
     }));
   }
 
-  return json({ host, q, products: slim });
+  return json({ host, q, currency: 'CAD', products: slim });
 };
 
 export const config = { path: '/api/stock' };
