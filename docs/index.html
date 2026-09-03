@@ -1700,6 +1700,17 @@ function shopPlain(store,rows){
       +` (${r.p.v.l})  $${r.h.price!=null?r.h.price.toFixed(2):'?'}${mkt}${alt}`;
   }).join('\n');
 }
+/* What a Canadian shop typically charges at each condition, as a multiple of the
+   TCGplayer US market figure. The card API carries ONE market value per printing with
+   no condition dimension, and it behaves like the Near Mint one — measured over 5,579
+   cached store offers (Sep 2026) the median store/market ratio falls monotonically:
+   NM 1.19, LP 1.07, MP 0.94, PL 0.77, HP 0.75, DMG 0.66. Comparing a played copy
+   straight to that figure made ordinary pricing look like a bargain.
+   These are Canadian prices over a US figure, so each factor already carries the ~19%
+   local premium: par is 0%, and green means genuinely cheap *here*, not merely below a
+   US number. Recompute from stockCache if the market moves. */
+const COND_PAR={NM:1.19, LP:1.07, MP:0.94, PL:0.77, HP:0.75, DMG:0.66};
+
 let SHOP_TXT={};
 function copyStoreList(store){
   const txt=SHOP_TXT[store]||'';
@@ -1719,6 +1730,10 @@ function renderShopping(){
       spread over ${stores.length} store${stores.length===1?'':'s'}.
       Only the printing each pocket actually needs counts, so a reverse holo is never
       filled by the normal print. Prices are the stores' own CAD.
+      <b>Market</b> is the TCGplayer <i>US</i> figure for that printing, which is Near Mint anchored —
+      the card API carries no per-condition prices. The percentage is not measured against it directly:
+      it compares the asking price with what a Canadian shop normally charges <i>at that condition</i>,
+      so <b>0% is par</b>, green is genuinely cheap here and amber is over the odds.
       ${unchecked?`<br><span class="warn">${unchecked} card${unchecked===1?'':'s'} in scope have not been stock-checked yet — this list is incomplete until they are.</span>`:''}
     </div>
     <div class="acts" style="margin-top:9px">
@@ -1743,10 +1758,13 @@ function renderShopping(){
          number the pocket shows. The store price is real CAD, so comparing them is
          the useful signal: is this a good buy, or am I paying over the odds? */
       const mkt=r.p.v.p, mktCad=mkt!=null?mkt*FX:null;
+      const par=COND_PAR[r.h.cond];               // no factor -> no claim
       let delta='';
-      if(mktCad&&r.h.price!=null&&mktCad>0.01){
-        const d=Math.round((r.h.price/mktCad-1)*100);
-        if(Math.abs(d)>=5) delta=`<span class="dl ${d<0?'under':'over'}">${d<0?'':'+'}${d}%</span>`;
+      if(mktCad&&par&&r.h.price!=null&&mktCad>0.01){
+        const expect=mktCad*par;
+        const d=Math.round((r.h.price/expect-1)*100);
+        if(Math.abs(d)>=5) delta=`<span class="dl ${d<0?'under':'over'}"
+          title="Typical here for ${r.h.cond} is about C$${expect.toFixed(2)}">${d<0?'':'+'}${d}%</span>`;
       }
       const elsewhere=r.alts.length
         ? `<span class="alt">elsewhere: ${r.alts.map(a=>
@@ -1758,7 +1776,7 @@ function renderShopping(){
         <span class="st">${r.p.c.set} ${r.p.c.num}${r.p.c.tot?'/'+r.p.c.tot:''}</span>
         <span class="vt">${r.p.v.s}</span>
         <span class="cd">${r.h.cond||''}</span>
-        <span class="mk" title="TCGplayer US market, converted at ${FX}">${money(mkt)}</span>
+        <span class="mk" title="TCGplayer US market for this printing (Near Mint anchored), converted at ${FX}">${money(mkt)}</span>
         <span class="pr">$${r.h.price!=null?r.h.price.toFixed(2):'?'} ${delta}</span>
         ${elsewhere}
       </div>`;
