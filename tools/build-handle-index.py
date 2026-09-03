@@ -193,18 +193,34 @@ def matches(card, title, sib_ann):
         if hits_sib and not hits_mine:
             return False
 
+    # Face to Face writes the card id into the title — "Feebas - 49/106 - Common
+    # [ex9-49] [Non-Holo]" — so the tokens are (49,106), (ex9,None) and (49,None).
+    # Checking the total only when a token happened to carry one let that bare 49
+    # match ANY Feebas numbered 49, which pointed three different Feebas cards at
+    # the same cheap product. If the title states a total anywhere, it must agree.
+    numtoks = [(canon_num(a), canon_num(b)) for a, b in
+               ((m.group(1), m.group(2)) for m in NUMTOK.finditer(title))]
+    saw_total = any(b for a, b in numtoks if a == want)
     num_ok = False
-    for m in NUMTOK.finditer(title):
-        if canon_num(m.group(1)) != want:
+    for a, b in numtoks:
+        if a != want:
             continue
-        if not lettered and want_t and m.group(2):
-            t = canon_num(m.group(2))
-            if not t or t[1] != want_t[1]:
-                continue
+        if not lettered and want_t:
+            if b:
+                if b[1] != want_t[1]:
+                    continue
+            elif saw_total:
+                continue            # a bare number, when the title does state one
         num_ok = True
         break
     if not num_ok:
         return False
+    # A title that never states a total (Deck Out writes "Slowpoke (81)") is matched on
+    # the number alone, so make the set corroborate it or 81 matches 81 from any set.
+    if want_t and not saw_total:
+        st = {t for t in toks(card.get('set', '')) if len(t) > 2}
+        if st and not (st & tt):
+            return False
 
     mine = toks(search_name(card['n']))
     if mine <= tt:
@@ -232,7 +248,7 @@ def guide_cards():
             if real in seen or c.get('custom'):
                 continue
             seen.add(real)
-            cards.append({'key': real, 'n': c['n'], 'num': c['num'],
+            cards.append({'key': real, 'n': c['n'], 'num': c['num'], 'set': c.get('set', ''),
                           'tot': c.get('tot'), 'sid': c.get('sid')})
     for g, lst in D['cameos'].items():
         for c in lst:
@@ -240,7 +256,7 @@ def guide_cards():
             if real in seen:
                 continue
             seen.add(real)
-            cards.append({'key': real, 'n': c['n'], 'num': c['num'],
+            cards.append({'key': real, 'n': c['n'], 'num': c['num'], 'set': c.get('set', ''),
                           'tot': c.get('tot'), 'sid': c.get('sid')})
     # annotation siblings: cards sharing a set+number, where the annotation matters
     bysn = collections.defaultdict(list)
