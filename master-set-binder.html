@@ -1720,7 +1720,8 @@ function shoppingRows(){
 function shopPlain(store,rows){
   return rows.map(r=>{
     const mc=condMarket(r.p.v.p,r.h.cond);
-    const mkt=r.p.v.p!=null?`  mkt NM ${money(r.p.v.p)}${mc!=null?` / ${r.h.cond} C$${mc.toFixed(2)}`:''}`:'';
+    const nm=r.p.v.p!=null?r.p.v.p*FX*CAD_PREMIUM:null;
+    const mkt=nm!=null?`  NM here C$${nm.toFixed(2)}${mc!=null?` / ${r.h.cond} here C$${mc.toFixed(2)}`:''}`:'';
     const alt=r.alts.length?`  [also ${r.alts.map(a=>a.store+' $'+(a.price!=null?a.price.toFixed(2):'?')).join(', ')}]`:'';
     return `${r.p.c.n} — ${r.p.c.set} ${r.p.c.num}${r.p.c.tot?'/'+r.p.c.tot:''}`
       +` (${r.p.v.l})  $${r.h.price!=null?r.h.price.toFixed(2):'?'}${mkt}${alt}`;
@@ -1737,15 +1738,12 @@ function shopPlain(store,rows){
    US number. Recompute from stockCache if the market moves. */
 const COND_MULT={NM:1.00, LP:0.85, PL:0.79, MP:0.70, HP:0.53, DMG:0.50};
 const CAD_PREMIUM=1.19;        // NM here vs US market: import, FX spread, margin
-/* par = what a Canadian shop typically asks at that condition, as a multiple of the
-   NM-anchored US market figure. */
-const COND_PAR=Object.fromEntries(
-  Object.entries(COND_MULT).map(([c,m])=>[c,+(m*CAD_PREMIUM).toFixed(3)]));
-/* Market value at a given condition, in CAD. The API gives one NM-anchored figure per
-   printing, so the played tiers are derived from COND_MULT. */
+/* What a copy in this condition normally costs *here*, in CAD: the NM-anchored US
+   market figure, scaled to the condition and lifted by the Canadian premium. This is
+   the number the percentage is measured against, so it has to be the number shown. */
 function condMarket(usd,cond){
   const m=COND_MULT[cond];
-  return (usd==null||!m)?null:usd*FX*m;
+  return (usd==null||!m)?null:usd*FX*m*CAD_PREMIUM;
 }
 
 let SHOP_TXT={};
@@ -1767,13 +1765,15 @@ function renderShopping(){
       spread over ${stores.length} store${stores.length===1?'':'s'}.
       Only the printing each pocket actually needs counts, so a reverse holo is never
       filled by the normal print. Prices are the stores' own CAD.
-      <b>Mkt NM</b> is the TCGplayer <i>US</i> market for that printing, which is Near Mint anchored —
-      the card API carries no per-condition prices — and <b>Mkt @cond</b> scales it to the listed
-      condition using the measured price curve (LP 0.85, PL 0.79, MP 0.70, HP 0.53, DMG 0.50 of NM,
-      medians over 215 listings priced in NM and another condition by the same shop), so you can see
-      what the discount is actually buying. The percentage is not measured against it directly:
-      it compares the asking price with what a Canadian shop normally charges <i>at that condition</i>,
-      so <b>0% is par</b>, green is genuinely cheap here and amber is over the odds.
+      <b>NM here</b> and <b>@cond here</b> are both what the card normally costs <i>in Canada</i>:
+      the TCGplayer US market for that printing (which is Near Mint anchored — the card API carries no
+      per-condition prices) plus the measured ${Math.round((CAD_PREMIUM-1)*100)}% local premium for
+      import, FX spread and margin. <b>@cond here</b> then scales that to the listed condition using
+      the measured curve (LP 0.85, PL 0.79, MP 0.70, HP 0.53, DMG 0.50 of NM, medians over 215 listings
+      priced in NM and another condition by the same shop). The gap between the two columns is what the
+      condition discount is worth; compare it with the gap in asking price to judge whether a played
+      copy is the better buy. The percentage compares the asking price with <b>@cond here</b>, the
+      figure beside it, so <b>0% is par</b>, green is genuinely cheap and amber is over the odds.
       ${unchecked?`<br><span class="warn">${unchecked} card${unchecked===1?'':'s'} in scope have not been stock-checked yet — this list is incomplete until they are.</span>`:''}
     </div>
     <div class="acts" style="margin-top:9px">
@@ -1794,23 +1794,24 @@ function renderShopping(){
         <button onclick="copyStoreList('${store.replace(/'/g,"\\'")}')">copy</button></span></h3>
       <div class="shop-hd"><span>Guide</span><span>Card</span><span>Set &amp; number</span>
         <span>Print</span><span>Cond</span>
-        <span class="r" title="Market value of a Near Mint copy, in CAD">Mkt NM</span>
-        <span class="r" title="Market value at the listed condition — NM market scaled by the measured condition curve">Mkt @cond</span>
-        <span class="r" title="Store price, and how it compares with the normal Canadian price at that condition">Price</span></div>`;
+        <span class="r" title="What a Near Mint copy normally costs in Canada">NM here</span>
+        <span class="r" title="What a copy in the listed condition normally costs in Canada — NM here scaled by the measured condition curve. The percentage is measured against this.">@cond here</span>
+        <span class="r" title="Store price, and how it compares with the @cond here figure beside it">Price</span></div>`;
     rows.forEach(r=>{
       const also=perKey[r.p.key]>1?`<span class="also">also at ${perKey[r.p.key]-1}</span>`:'';
-      /* Market is the TCGplayer US figure converted at the toolbar rate — the same
-         number the pocket shows. The store price is real CAD, so comparing them is
-         the useful signal: is this a good buy, or am I paying over the odds? */
-      const mkt=r.p.v.p, mktCad=mkt!=null?mkt*FX:null;
-      const mktAtCond=condMarket(mkt,r.h.cond);   // what this condition is worth
-      const par=COND_PAR[r.h.cond];               // no factor -> no claim
+      /* Both figures are what the card normally costs in Canada, so the percentage
+         compares the asking price with the number printed next to it rather than with
+         an invisible one. NM here answers "what would a clean copy cost me", @cond here
+         answers "what should this copy cost", and the gap between them is the discount
+         the condition is buying. */
+      const mkt=r.p.v.p;
+      const mktNmHere=mkt!=null?mkt*FX*CAD_PREMIUM:null;
+      const mktAtCond=condMarket(mkt,r.h.cond);   // null when the condition is unknown
       let delta='';
-      if(mktCad&&par&&r.h.price!=null&&mktCad>0.01){
-        const expect=mktCad*par;
-        const d=Math.round((r.h.price/expect-1)*100);
+      if(mktAtCond&&r.h.price!=null&&mktAtCond>0.01){
+        const d=Math.round((r.h.price/mktAtCond-1)*100);
         if(Math.abs(d)>=5) delta=`<span class="dl ${d<0?'under':'over'}"
-          title="Typical here for ${r.h.cond} is about C$${expect.toFixed(2)}">${d<0?'':'+'}${d}%</span>`;
+          title="Typical here for ${r.h.cond} is C$${mktAtCond.toFixed(2)}">${d<0?'':'+'}${d}%</span>`;
       }
       const elsewhere=r.alts.length
         ? `<span class="alt">elsewhere: ${r.alts.map(a=>
@@ -1822,8 +1823,8 @@ function renderShopping(){
         <span class="st">${r.p.c.set} ${r.p.c.num}${r.p.c.tot?'/'+r.p.c.tot:''}</span>
         <span class="vt">${r.p.v.s}</span>
         <span class="cd">${r.h.cond||''}</span>
-        <span class="mk" title="TCGplayer US market for this printing, Near Mint, converted at ${FX}">${money(mkt)}</span>
-        <span class="mk mc" title="${r.h.cond?`What a ${r.h.cond} copy is worth — NM market x ${COND_MULT[r.h.cond]||'?'}, the median ${r.h.cond}/NM price ratio measured across 215 shop listings`:'Condition not recognised'}">${mktAtCond!=null?'C$'+mktAtCond.toFixed(2):'—'}</span>
+        <span class="mk" title="What a Near Mint copy normally costs in Canada — TCGplayer US market for this printing (Near Mint anchored) at ${FX}, plus the measured ${Math.round((CAD_PREMIUM-1)*100)}% local premium">${mktNmHere!=null?'C$'+mktNmHere.toFixed(2):'—'}</span>
+        <span class="mk mc" title="${r.h.cond?`What a ${r.h.cond} copy normally costs in Canada — NM here x ${COND_MULT[r.h.cond]||'?'}, the median ${r.h.cond}/NM price ratio measured across 215 shop listings. The percentage compares the asking price with this figure.`:'Condition not recognised — no percentage shown'}">${mktAtCond!=null?'C$'+mktAtCond.toFixed(2):'—'}</span>
         <span class="pr">$${r.h.price!=null?r.h.price.toFixed(2):'?'} ${delta}</span>
         ${elsewhere}
       </div>`;
