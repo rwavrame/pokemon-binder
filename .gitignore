@@ -8,3 +8,12 @@
 .env
 .env.*
 !.env.example
+
+# Local sweep cache for tools/build-handle-index.py — ~30 MB of store catalogues,
+# rebuilt on demand and useless to anyone else.
+tools/.catalogue-cache/
+
+# Scans and scratch work that aren't part of the guide
+*.jpeg
+*.pdf
+*.xlsx
