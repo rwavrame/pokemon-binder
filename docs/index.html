@@ -129,6 +129,22 @@ body.pg4 .pocket .price,body.pg4 .pocket .num{font-size:11px;bottom:40px}
 .notes h4:first-child{margin-top:0}
 .notes ul{margin:0 0 0 18px}
 .notes code{background:#0e1020;padding:1px 5px;border-radius:4px;font-size:11.5px;color:#9ee6c0}
+.notes details{border-top:1px solid #23234a}
+.notes details:first-of-type{border-top:0}
+.notes summary{color:#cfd8ff;font-size:12.5px;margin:0;padding:8px 0;text-transform:uppercase;
+  letter-spacing:.7px;cursor:pointer;list-style:none;font-weight:700;display:flex;align-items:center;gap:7px}
+.notes summary::-webkit-details-marker{display:none}
+.notes summary::before{content:'▸';color:#6678aa;font-size:11px;transition:transform .12s}
+.notes details[open] summary::before{transform:rotate(90deg)}
+.notes summary:hover{color:#fff}
+.notes details>ul{margin:2px 0 10px 18px}
+.tabbtn-cfg{background:#1b1b3a;border:1px dashed #3a3a6b;color:#8f9ac4}
+.tabbtn-cfg:hover{color:#dfe6ff;border-color:#5b8cff}
+#tabPicker{display:none;margin:0 0 12px;padding:10px 12px;background:#14142c;
+  border:1px solid #262650;border-radius:10px}
+#tabPicker.open{display:block}
+#tabPicker .lab{font-size:11px;color:#8f9ac4;text-transform:uppercase;letter-spacing:.8px;margin-right:8px}
+#tabPicker .hint{display:block;color:#6b7699;font-size:11px;margin-top:7px}
 footer{max-width:1180px;margin:0 auto;padding:20px 14px 50px;font-size:11px;color:#666688;line-height:1.7}
 #toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#1c2b1c;border:1px solid #3ddc97;color:#9ee6c0;padding:8px 16px;border-radius:8px;font-size:12px;opacity:0;transition:opacity .3s;pointer-events:none;z-index:200}
 #toast.show{opacity:1}
@@ -202,7 +218,7 @@ body.pg4 .pocket .foot .stockline{font-size:9.5px}
 
 @media print{
   body{background:#fff;color:#000}
-  header,.toolbar,.tabs,footer,#binder,.notes,.ph-bar,#speciesBar,#toast,.modal{display:none!important}
+  header,.toolbar,.tabs,#tabPicker,footer,#binder,.notes,.ph-bar,#speciesBar,#toast,.modal{display:none!important}
   #checklist{display:block!important}
   /* placeholder mode wins: hide the checklist and print card-size cut sheets */
   body.printing-ph #checklist{display:none!important}
@@ -242,6 +258,7 @@ body.pg4 .pocket .foot .stockline{font-size:9.5px}
 
 <main>
   <div class="tabs" id="tabs"></div>
+  <div id="tabPicker"></div>
 
   <div class="toolbar">
     <input type="text" id="q" placeholder="Search set, card, artist…">
@@ -492,6 +509,31 @@ function speciesOrder(g){
     DATA.species[a].dex-DATA.species[b].dex);
 }
 /* Species the user has switched off — hidden everywhere, but never deleted. */
+/* Guides hidden from the tab bar. A working-set filter only: nothing is deleted, and
+   totals, Export JSON and CSV still cover every tab so the data stays whole. */
+const DEFAULT_HIDDEN=['mew','celebi','jirachi','leafeon','abra','eevee','morpeko',
+                      'pikachu','komiya','amazing','prism','radiant'];
+let hiddenTabs=new Set(DEFAULT_HIDDEN);
+try{
+  const saved=localStorage.getItem('hiddenTabs_v1');
+  if(saved!==null) hiddenTabs=new Set(JSON.parse(saved));
+}catch(e){}
+function visibleGroups(){
+  const v=DATA.groups.filter(g=>!hiddenTabs.has(g.id));
+  return v.length?v:DATA.groups;          // never paint an empty tab bar
+}
+function toggleTabVisible(id){
+  hiddenTabs.has(id)?hiddenTabs.delete(id):hiddenTabs.add(id);
+  if(visibleGroups().length===0) hiddenTabs.delete(id);
+  try{localStorage.setItem('hiddenTabs_v1',JSON.stringify([...hiddenTabs]));}catch(e){}
+  if(hiddenTabs.has(curTab)) curTab=visibleGroups()[0].id;
+  refreshAll();
+}
+function showAllTabs(){
+  hiddenTabs=new Set();
+  try{localStorage.setItem('hiddenTabs_v1','[]');}catch(e){}
+  refreshAll();
+}
 let excluded=new Set();
 function isExcluded(sp){return excluded.has(sp)}
 function activeSpecies(g){return speciesOrder(g).filter(sp=>!isExcluded(sp))}
@@ -656,11 +698,22 @@ function renderSpeciesBar(){
     `<span class="hint">Hidden entries drop out of the pages, totals, checklist and placeholders. Nothing is deleted — owned marks come back when you switch them on again.</span></div>`;
 }
 function renderTabs(){
-  document.getElementById('tabs').innerHTML=DATA.groups.map(g=>{
+  const hid=hiddenTabs.size;
+  document.getElementById('tabs').innerHTML=visibleGroups().map(g=>{
     const ps=pockets(g.id), own=ps.filter(p=>statusOf(p.key)==='owned').length;
     return `<button class="${g.id===curTab?'active':''}" onclick="setTab('${g.id}')">${g.title}
       <span class="mini">${own}/${ps.length}</span></button>`;
-  }).join('');
+  }).join('')+
+  `<button class="tabbtn-cfg" onclick="document.getElementById('tabPicker').classList.toggle('open')"
+     title="Choose which guides appear in this bar">⚙ Guides${hid?` <span class="mini">${hid} hidden</span>`:''}</button>`;
+  const pick=document.getElementById('tabPicker');
+  pick.innerHTML=`<span class="lab">Show</span>`+DATA.groups.map(g=>{
+    const off=hiddenTabs.has(g.id);
+    return `<span class="species-chip ${off?'off':''}" onclick="toggleTabVisible('${g.id}')"
+      title="${off?'Show':'Hide'} ${g.title}"><span class="tick">${off?'☐':'☑'}</span>${g.title}</span>`;
+  }).join('')+
+  `<span class="species-chip" onclick="showAllTabs()" title="Show every guide">↺ all</span>
+   <span class="hint">Hiding a guide only tidies this bar — progress, totals, Export JSON and CSV still cover every tab.</span>`;
 }
 function setTab(id){curTab=id;window.scrollTo(0,0);refreshAll()}
 
@@ -1319,6 +1372,34 @@ function renderChecklist(){
 }
 
 /* notes panel */
+/* The notes run to several screens. Each <h4> section becomes its own collapsible so
+   the page opens short and you expand only what you need; open sections are remembered. */
+let notesOpen=new Set();
+try{ notesOpen=new Set(JSON.parse(localStorage.getItem('notesOpen_v1')||'[]')); }catch(e){}
+function rememberNote(sum){
+  const k=sum.textContent.trim();
+  sum.parentElement.open?notesOpen.add(k):notesOpen.delete(k);
+  try{localStorage.setItem('notesOpen_v1',JSON.stringify([...notesOpen]));}catch(e){}
+}
+function setNotes(html){
+  const el=document.getElementById('notes');
+  el.innerHTML=html;
+  const kids=[...el.childNodes];
+  el.innerHTML='';
+  let cur=null;
+  kids.forEach(node=>{
+    if(node.nodeName==='H4'){
+      cur=document.createElement('details');
+      const s=document.createElement('summary');
+      s.innerHTML=node.innerHTML;
+      cur.appendChild(s);
+      if(notesOpen.has(s.textContent.trim())) cur.open=true;
+      cur.addEventListener('toggle',()=>rememberNote(s));
+      el.appendChild(cur);
+    } else if(cur){ cur.appendChild(node); }
+    else { el.appendChild(node); }
+  });
+}
 function renderNotes(){
   const g=groupById(curTab);
   const ps=pockets(curTab);
@@ -1327,9 +1408,9 @@ function renderNotes(){
   const oldest=ps.map(p=>p.c.d).filter(Boolean).sort()[0]||'';
   /* The artist tab is a different kind of set, so almost none of the notes below
      apply to it (no evolution line, no cameos, no variant pockets). It gets its own. */
-  if(curTab==='morii'||curTab==='komiya'){ document.getElementById('notes').innerHTML=artistNotes(curTab,ps,uniq); return; }
-  if(RARITY_NOTES[curTab]){ document.getElementById('notes').innerHTML=rarityNotes(curTab,ps); return; }
-  document.getElementById('notes').innerHTML=`
+  if(curTab==='morii'||curTab==='komiya'){ setNotes(artistNotes(curTab,ps,uniq)); return; }
+  if(RARITY_NOTES[curTab]){ setNotes(rarityNotes(curTab,ps)); return; }
+  setNotes(`
   <h4>How this binder works</h4>
   <ul>
     <li><b>Every printing gets its own pocket.</b> A card that came in normal and reverse holo takes two pockets, side by side, in that order.</li>
@@ -1410,7 +1491,7 @@ function renderNotes(){
     <li>Graded copies are not separate pockets.</li>
     <li><b>Residual risk:</b> alternate-foil and product-exclusive prints are documented only by community databases (Bulbapedia, Elite Fourum, TCGplayer product listings), all of them incomplete and sometimes in conflict — Milotic's cosmos print, for instance, is on TCGplayer but absent from Bulbapedia. The sweep above was driven off holo-rare candidates, so a cosmos print of a common or uncommon could still be missing. Treat this binder as thorough, not proven exhaustive.</li>
     <li>Anything above can be tracked with the <b>+ Add custom pocket</b> slot in the Extras section, which saves alongside everything else.</li>
-  </ul>`;
+  </ul>`);
 }
 
 /* Notes for the artist tabs (Yuka Morii, Tomokazu Komiya). Kept out of renderNotes()
