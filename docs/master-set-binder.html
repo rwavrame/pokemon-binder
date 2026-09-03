@@ -156,10 +156,10 @@ body.pg4 .pocket .price,body.pg4 .pocket .num{font-size:11px;bottom:40px}
 .shop-store>h3 .n{color:#9ee6c0;font-weight:700;text-transform:none;letter-spacing:0}
 .shop-store>h3 button{font-size:10.5px;padding:3px 9px;border-radius:6px;background:#26325a;
   border:1px solid #3a4a80;color:#cfd8ff;cursor:pointer}
-.shop-row{display:grid;grid-template-columns:82px 1fr 146px 32px 32px 66px 74px 88px;gap:7px;align-items:baseline;
+.shop-row{display:grid;grid-template-columns:82px 1fr 146px 32px 32px 100px 74px 88px;gap:7px;align-items:baseline;
   padding:6px 14px;border-top:1px solid #1c2444;font-size:12px}
 .shop-row.best{background:rgba(61,220,151,.045)}
-.shop-hd{display:grid;grid-template-columns:82px 1fr 146px 32px 32px 66px 74px 88px;gap:7px;
+.shop-hd{display:grid;grid-template-columns:82px 1fr 146px 32px 32px 100px 74px 88px;gap:7px;
   padding:5px 14px;border-top:1px solid #262650;background:#10102a;
   font-size:9.5px;letter-spacing:.7px;text-transform:uppercase;color:#6678aa;font-weight:700}
 .shop-hd .r{text-align:right}
@@ -168,6 +168,7 @@ body.pg4 .pocket .price,body.pg4 .pocket .num{font-size:11px;bottom:40px}
 .shop-row .dl{font-size:9.5px;font-weight:700}
 .shop-row .dl.under{color:#3ddc97}
 .shop-row .dl.over{color:#ffb347}
+.shop-row .dl.sv{color:#7d88ad;font-weight:600}
 .shop-row .tag-best{font-size:9px;font-weight:800;letter-spacing:.4px;color:#3ddc97;
   border:1px solid rgba(61,220,151,.4);border-radius:4px;padding:1px 4px;margin-left:5px}
 .shop-row .alt{grid-column:2/9;color:#66739a;font-size:10.5px;margin:1px 0 2px}
@@ -1721,7 +1722,8 @@ function shopPlain(store,rows){
   return rows.map(r=>{
     const mc=condMarket(r.p.v.p,r.h.cond);
     const nm=r.p.v.p!=null?r.p.v.p*FX*CAD_PREMIUM:null;
-    const mkt=nm!=null?`  NM here C$${nm.toFixed(2)}${mc!=null?` / ${r.h.cond} here C$${mc.toFixed(2)}`:''}`:'';
+    const sv=(nm&&r.h.price!=null&&nm>0.01)?` (${r.h.price<nm?'':'+'}${Math.round((r.h.price/nm-1)*100)}% vs NM)`:'';
+    const mkt=nm!=null?`  NM here C$${nm.toFixed(2)}${sv}${mc!=null?` / ${r.h.cond} here C$${mc.toFixed(2)}`:''}`:'';
     const alt=r.alts.length?`  [also ${r.alts.map(a=>a.store+' $'+(a.price!=null?a.price.toFixed(2):'?')).join(', ')}]`:'';
     return `${r.p.c.n} — ${r.p.c.set} ${r.p.c.num}${r.p.c.tot?'/'+r.p.c.tot:''}`
       +` (${r.p.v.l})  $${r.h.price!=null?r.h.price.toFixed(2):'?'}${mkt}${alt}`;
@@ -1771,9 +1773,12 @@ function renderShopping(){
       import, FX spread and margin. <b>@cond here</b> then scales that to the listed condition using
       the measured curve (LP 0.85, PL 0.79, MP 0.70, HP 0.53, DMG 0.50 of NM, medians over 215 listings
       priced in NM and another condition by the same shop). The gap between the two columns is what the
-      condition discount is worth; compare it with the gap in asking price to judge whether a played
-      copy is the better buy. The percentage compares the asking price with <b>@cond here</b>, the
-      figure beside it, so <b>0% is par</b>, green is genuinely cheap and amber is over the odds.
+      condition discount is worth. Each column carries its own percentage, both measuring the asking
+      price against the figure beside it. The grey one under <b>NM here</b> is what this copy saves
+      against a clean one — how much the condition is knocking off in practice. The green or amber one
+      under <b>Price</b> compares it with <b>@cond here</b>, so <b>0% is par</b> for that condition,
+      green is genuinely cheap and amber is over the odds. A big grey saving with an amber price means
+      the discount looks generous but is not, for a card in that state.
       ${unchecked?`<br><span class="warn">${unchecked} card${unchecked===1?'':'s'} in scope have not been stock-checked yet — this list is incomplete until they are.</span>`:''}
     </div>
     <div class="acts" style="margin-top:9px">
@@ -1794,7 +1799,7 @@ function renderShopping(){
         <button onclick="copyStoreList('${store.replace(/'/g,"\\'")}')">copy</button></span></h3>
       <div class="shop-hd"><span>Guide</span><span>Card</span><span>Set &amp; number</span>
         <span>Print</span><span>Cond</span>
-        <span class="r" title="What a Near Mint copy normally costs in Canada">NM here</span>
+        <span class="r" title="What a Near Mint copy normally costs in Canada, and what this copy saves against one">NM here &amp; saving</span>
         <span class="r" title="What a copy in the listed condition normally costs in Canada — NM here scaled by the measured condition curve. The percentage is measured against this.">@cond here</span>
         <span class="r" title="Store price, and how it compares with the @cond here figure beside it">Price</span></div>`;
     rows.forEach(r=>{
@@ -1806,6 +1811,15 @@ function renderShopping(){
          the condition is buying. */
       const mkt=r.p.v.p;
       const mktNmHere=mkt!=null?mkt*FX*CAD_PREMIUM:null;
+      /* What the condition saves against a clean copy: asking price vs NM here. Neutral
+         colour -- a big saving on a Heavily Played card is par, not a bargain, and that
+         judgement is what the percentage on Price is for. */
+      let save='';
+      if(mktNmHere&&r.h.price!=null&&mktNmHere>0.01){
+        const d=Math.round((r.h.price/mktNmHere-1)*100);
+        if(Math.abs(d)>=5) save=`<span class="dl sv"
+          title="This copy asks ${d<0?`C$${(mktNmHere-r.h.price).toFixed(2)} less than`:`C$${(r.h.price-mktNmHere).toFixed(2)} more than`} a Near Mint one normally costs here">${d<0?'':'+'}${d}%</span>`;
+      }
       const mktAtCond=condMarket(mkt,r.h.cond);   // null when the condition is unknown
       let delta='';
       if(mktAtCond&&r.h.price!=null&&mktAtCond>0.01){
@@ -1823,7 +1837,7 @@ function renderShopping(){
         <span class="st">${r.p.c.set} ${r.p.c.num}${r.p.c.tot?'/'+r.p.c.tot:''}</span>
         <span class="vt">${r.p.v.s}</span>
         <span class="cd">${r.h.cond||''}</span>
-        <span class="mk" title="What a Near Mint copy normally costs in Canada — TCGplayer US market for this printing (Near Mint anchored) at ${FX}, plus the measured ${Math.round((CAD_PREMIUM-1)*100)}% local premium">${mktNmHere!=null?'C$'+mktNmHere.toFixed(2):'—'}</span>
+        <span class="mk" title="What a Near Mint copy normally costs in Canada — TCGplayer US market for this printing (Near Mint anchored) at ${FX}, plus the measured ${Math.round((CAD_PREMIUM-1)*100)}% local premium. The percentage is what this copy saves against a clean one.">${mktNmHere!=null?'C$'+mktNmHere.toFixed(2):'—'} ${save}</span>
         <span class="mk mc" title="${r.h.cond?`What a ${r.h.cond} copy normally costs in Canada — NM here x ${COND_MULT[r.h.cond]||'?'}, the median ${r.h.cond}/NM price ratio measured across 215 shop listings. The percentage compares the asking price with this figure.`:'Condition not recognised — no percentage shown'}">${mktAtCond!=null?'C$'+mktAtCond.toFixed(2):'—'}</span>
         <span class="pr">$${r.h.price!=null?r.h.price.toFixed(2):'?'} ${delta}</span>
         ${elsewhere}
