@@ -143,6 +143,16 @@ body.pg4 .pocket .price,body.pg4 .pocket .num{font-size:11px;bottom:40px}
 #tabPicker{display:none;margin:0 0 12px;padding:10px 12px;background:#14142c;
   border:1px solid #262650;border-radius:10px}
 #tabPicker.open{display:block}
+#storePicker{display:none;margin:0 0 12px;padding:10px 12px;background:#14142c;
+  border:1px solid #262650;border-radius:10px}
+#storePicker.open{display:block}
+#storePicker .lab{font-size:11px;color:#8f9ac4;text-transform:uppercase;letter-spacing:.8px;
+  display:block;margin-bottom:8px}
+#storePicker .hint{display:block;color:#6b7699;font-size:11px;margin-top:9px}
+.disc-row{display:inline-flex;align-items:center;gap:5px;margin:0 12px 7px 0;font-size:12px;color:#cfd8ff}
+.disc-row input{width:52px;padding:4px 6px;background:#1e1e40;border:1px solid #333;
+  color:#ddd;border-radius:6px;font-size:12px}
+.disc-row input:not([value=""]){border-color:#3ddc97}
 #tabPicker .lab{font-size:11px;color:#8f9ac4;text-transform:uppercase;letter-spacing:.8px;margin-right:8px}
 #tabPicker .hint{display:block;color:#6b7699;font-size:11px;margin-top:7px}
 #shoplist{display:none}
@@ -169,6 +179,7 @@ body.pg4 .pocket .price,body.pg4 .pocket .num{font-size:11px;bottom:40px}
 .shop-row .dl.under{color:#3ddc97}
 .shop-row .dl.over{color:#ffb347}
 .shop-row .dl.sv{color:#7d88ad;font-weight:600}
+.was{text-decoration:line-through;color:#66739a;font-size:10px;font-weight:400;margin-left:1px}
 .shop-row .tag-best{font-size:9px;font-weight:800;letter-spacing:.4px;color:#3ddc97;
   border:1px solid rgba(61,220,151,.4);border-radius:4px;padding:1px 4px;margin-left:5px}
 .shop-row .alt{grid-column:2/9;color:#66739a;font-size:10.5px;margin:1px 0 2px}
@@ -268,6 +279,7 @@ body.pg4 .pocket .foot .stockline{font-size:9.5px}
   body.printing-shop .shop-row{color:#000;border-color:#ccc}
   body.printing-shop .shop-hd{background:#f2f2f2;color:#333;border-color:#bbb;display:grid!important}
   body.printing-shop .shop-row .nm a,body.printing-shop .shop-row .pr{color:#000}
+  body.printing-shop .was{color:#666}
   body.printing-shop .shop-store>h3 button{display:none}
   #checklist{display:block!important}
   /* placeholder mode wins: hide the checklist and print card-size cut sheets */
@@ -309,6 +321,7 @@ body.pg4 .pocket .foot .stockline{font-size:9.5px}
 <main>
   <div class="tabs" id="tabs"></div>
   <div id="tabPicker"></div>
+  <div id="storePicker"></div>
 
   <div class="toolbar">
     <input type="text" id="q" placeholder="Search set, card, artist…">
@@ -757,7 +770,10 @@ function renderTabs(){
       <span class="mini">${own}/${ps.length}</span></button>`;
   }).join('')+
   `<button class="tabbtn-cfg" onclick="document.getElementById('tabPicker').classList.toggle('open')"
-     title="Choose which guides appear in this bar">⚙ Guides${hid?` <span class="mini">${hid} hidden</span>`:''}</button>`;
+     title="Choose which guides appear in this bar">⚙ Guides${hid?` <span class="mini">${hid} hidden</span>`:''}</button>`+
+  (()=>{const n=Object.keys(STORE_DISC).length;
+    return `<button class="tabbtn-cfg" onclick="document.getElementById('storePicker').classList.toggle('open')"
+     title="Standing discounts you get at each shop">⚙ Stores${n?` <span class="mini">${n} discount${n===1?'':'s'}</span>`:''}</button>`})();
   const pick=document.getElementById('tabPicker');
   pick.innerHTML=`<span class="lab">Show</span>`+DATA.groups.map(g=>{
     const off=hiddenTabs.has(g.id);
@@ -766,6 +782,16 @@ function renderTabs(){
   }).join('')+
   `<span class="species-chip" onclick="showAllTabs()" title="Show every guide">↺ all</span>
    <span class="hint">Hiding a guide only tidies this bar — progress, totals, Export JSON and CSV still cover every tab.</span>`;
+  const sp=document.getElementById('storePicker');
+  sp.innerHTML=`<span class="lab">Your discount at each shop (%)</span>`+STORES.map(st=>{
+    const v=STORE_DISC[st.id]?Math.round(STORE_DISC[st.id]*100):'';
+    return `<label class="disc-row" title="A standing discount you get on singles at ${st.name}">${st.name}
+      <input type="number" id="disc-${st.id}" min="0" max="90" step="0.5" value="${v}" placeholder="0"
+        onchange="setStoreDisc('${st.id}',this.value)"></label>`;
+  }).join('')+
+  `<span class="hint">Applied to every price shown for that shop, so "cheapest" and the market
+   percentages reflect what <i>you</i> pay. The shelf price stays visible, struck through, and the
+   stock cache keeps the shops' own figures — changing a rate never needs a re-check.</span>`;
 }
 function setTab(id){curTab=id;window.scrollTo(0,0);refreshAll()}
 
@@ -945,6 +971,35 @@ const STORES=[
   {id:'hoc',  name:'House of Cards',host:'houseofcards.ca'},
   {id:'dog',  name:'Deck Out',     host:'deckoutgaming.ca'}
 ];
+/* Standing discounts by store id -- a loyalty rate or trade credit taken off every
+   single at that shop. Applied at DISPLAY time only, exactly like FX: binderStock_v3
+   keeps the prices the shops actually advertise, so the rate can change without a
+   re-sweep and can never compound into cached data. */
+let STORE_DISC={};
+const _discByName={};              // offers carry the store NAME, not its id
+function rebuildDiscIndex(){
+  Object.keys(_discByName).forEach(k=>delete _discByName[k]);
+  STORES.forEach(s=>{ if(STORE_DISC[s.id]) _discByName[s.name]=STORE_DISC[s.id]; });
+}
+function discOf(store){ return _discByName[store]||0 }
+function netOf(o){ return o.price==null?null:o.price*(1-discOf(o.store)) }
+function discPct(store){ return Math.round(discOf(store)*100) }
+/* "$1.79 $1.90" -- what you pay, then the shelf price struck through. */
+function priceHtml(o){
+  const n=netOf(o);
+  if(n==null) return '$?';
+  return `$${n.toFixed(2)}`+(discOf(o.store)?` <s class="was" title="${o.store} lists this at $${o.price.toFixed(2)}; your ${discPct(o.store)}% discount takes it to $${n.toFixed(2)}">$${o.price.toFixed(2)}</s>`:'');
+}
+function setStoreDisc(id,pct){
+  const v=parseFloat(pct);
+  if(!isFinite(v)||v<0||v>90) return;
+  if(v) STORE_DISC[id]=v/100; else delete STORE_DISC[id];
+  try{localStorage.setItem('storeDisc_v1',JSON.stringify(STORE_DISC));}catch(e){}
+  rebuildDiscIndex();
+  const el=document.getElementById('disc-'+id);
+  if(el&&document.activeElement!==el) el.value=v||'';
+  refreshAll();
+}
 const STOCK_KEY='binderStock_v3';   // v2 came through the proxy; shape and source changed
 const STOCK_TTL=24*60*60*1000;      // a day; store inventory moves, cached answers go stale
 const STOCK_MAX_INFLIGHT=8;   // nine hosts now; still modest per host
@@ -1297,7 +1352,7 @@ function refreshStockBtn(pi,btn){
    stock — vintage reverse holos are scarce enough that an LP copy is the real option. */
 function rankOffers(list){
   return list.slice().sort((a,b)=>
-    (a.price??1e9)-(b.price??1e9) || _COND_RANK[a.cond]-_COND_RANK[b.cond]);
+    (netOf(a)??1e9)-(netOf(b)??1e9) || _COND_RANK[a.cond]-_COND_RANK[b.cond]);
 }
 function stockLineHtml(p){
   if(statusOf(p.key)==='owned') return '';
@@ -1316,15 +1371,15 @@ function stockLineHtml(p){
   if(inStock.length){
     const b=inStock[0];
     const cond=b.cond?` (${b.cond})`:'';
-    return `<span class="stockline in">✅ ${lab}in stock — ${b.store} $${b.price!=null?b.price.toFixed(2):'?'}${cond}</span>`;
+    return `<span class="stockline in">✅ ${lab}in stock — ${b.store} ${priceHtml(b)}${cond}</span>`;
   }
   /* the pocket's own printing is the headline; a different printing only ever gets a
      muted aside, never the main line */
   const aside=others.length
-    ? `<span class="stockline alt">(${_PRINT_LABEL[others[0].printing]||'normal'} print in stock, $${rankOffers(others)[0].price?.toFixed(2)??'?'})</span>`
+    ? `<span class="stockline alt">(${_PRINT_LABEL[others[0].printing]||'normal'} print in stock, ${priceHtml(rankOffers(others)[0])})</span>`
     : '';
   if(mine.length){
-    const lo=Math.min(...mine.map(h=>h.price??Infinity));
+    const lo=Math.min(...mine.map(h=>netOf(h)??Infinity));
     return `<span class="stockline out">⚠️ ${lab}sold out${isFinite(lo)?' — from $'+lo.toFixed(2):''}</span>`+aside;
   }
   if(e.failed && e.failed.length===STORES.length)
@@ -1387,12 +1442,12 @@ function stockDetailHtml(p){
     .sort((a,b)=>(b===want)-(a===want)||a.localeCompare(b));
   const rows=groups.map(g=>{
     const list=rankOffers(e.hits.filter(h=>h.printing===g))
-      .sort((a,b)=>(b.available-a.available)||(a.price??1e9)-(b.price??1e9));
+      .sort((a,b)=>(b.available-a.available)||(netOf(a)??1e9)-(netOf(b)??1e9));
     const head=`<div class="stock-grp${g===want?' want':''}">${(g in _PRINT_LABEL)?(_PRINT_LABEL[g]||'Normal'):g}${g===want?' — this pocket':''}</div>`;
     return head+list.map(h=>`<div class="stock-row ${h.available?'in':'out'}">
       <span class="who">${h.store}</span>
       <span class="what"><a href="${h.url}" target="_blank" rel="noopener" style="color:#8ab4ff;text-decoration:none">${h.title}</a>${h.variant?` <i style="color:#67759c">· ${h.variant}</i>`:''}${h.approx?' <i style="color:#a0a0b8">(product level)</i>':''}</span>
-      <span class="amt">${h.available?'in stock':'sold out'}${h.qty!=null?' ×'+h.qty:''}${h.price!=null?' · $'+h.price.toFixed(2):''}</span></div>`).join('');
+      <span class="amt">${h.available?'in stock':'sold out'}${h.qty!=null?' ×'+h.qty:''}${h.price!=null?' · '+priceHtml(h):''}</span></div>`).join('');
   }).join('');
   const age=Math.round((Date.now()-e.t)/60000);   // ageLabel() renders it
   return `<div class="stock-list"><h4>Canadian stock</h4>
@@ -1701,13 +1756,14 @@ function shoppingRows(){
     const best={};
     rankOffers(live).forEach(h=>{ if(!best[h.store]) best[h.store]=h; });
     perKey[p.key]=Object.keys(best).length;
-    const all=Object.entries(best).map(([store,h])=>({store,price:h.price,cond:h.cond,url:h.url}))
+    const all=Object.entries(best).map(([store,h])=>
+        ({store,price:netOf(h),list:h.price,cond:h.cond,url:h.url}))
                     .sort((a,b)=>(a.price??1e9)-(b.price??1e9));
     const low=all.length?all[0].price:null;
     Object.entries(best).forEach(([store,h])=>{
       (byStore[store]=byStore[store]||[]).push({g,p,h,
         alts:all.filter(a=>a.store!==store),      // the same card elsewhere, in stock
-        isLowest:h.price!=null&&low!=null&&h.price<=low+1e-9});
+        isLowest:netOf(h)!=null&&low!=null&&netOf(h)<=low+1e-9});
     });
   });
   const gorder={}; DATA.groups.forEach((g,i)=>gorder[g.id]=i);
@@ -1722,11 +1778,13 @@ function shopPlain(store,rows){
   return rows.map(r=>{
     const mc=condMarket(r.p.v.p,r.h.cond);
     const nm=r.p.v.p!=null?r.p.v.p*FX*CAD_PREMIUM:null;
-    const sv=(nm&&r.h.price!=null&&nm>0.01)?` (${r.h.price<nm?'':'+'}${Math.round((r.h.price/nm-1)*100)}% vs NM)`:'';
+    const net=netOf(r.h);
+    const sv=(nm&&net!=null&&nm>0.01)?` (${net<nm?'':'+'}${Math.round((net/nm-1)*100)}% vs NM)`:'';
     const mkt=nm!=null?`  NM here C$${nm.toFixed(2)}${sv}${mc!=null?` / ${r.h.cond} here C$${mc.toFixed(2)}`:''}`:'';
+    const off=discOf(r.h.store)?` (${r.h.store} lists $${r.h.price.toFixed(2)}, less your ${discPct(r.h.store)}%)`:'';
     const alt=r.alts.length?`  [also ${r.alts.map(a=>a.store+' $'+(a.price!=null?a.price.toFixed(2):'?')).join(', ')}]`:'';
     return `${r.p.c.n} — ${r.p.c.set} ${r.p.c.num}${r.p.c.tot?'/'+r.p.c.tot:''}`
-      +` (${r.p.v.l})  $${r.h.price!=null?r.h.price.toFixed(2):'?'}${mkt}${alt}`;
+      +` (${r.p.v.l})  $${net!=null?net.toFixed(2):'?'}${off}${mkt}${alt}`;
   }).join('\n');
 }
 /* What a Canadian shop typically charges at each condition, as a multiple of the
@@ -1779,7 +1837,7 @@ function renderShopping(){
       under <b>Price</b> compares it with <b>@cond here</b>, so <b>0% is par</b> for that condition,
       green is genuinely cheap and amber is over the odds. A big grey saving with an amber price means
       the discount looks generous but is not, for a card in that state.
-      ${unchecked?`<br><span class="warn">${unchecked} card${unchecked===1?'':'s'} in scope have not been stock-checked yet — this list is incomplete until they are.</span>`:''}
+      ${Object.keys(STORE_DISC).length?`<br><span style="color:#3ddc97">Your discount is applied throughout — ${STORES.filter(x=>STORE_DISC[x.id]).map(x=>`${x.name} ${Math.round(STORE_DISC[x.id]*100)}%</span><span style="color:#3ddc97">`).join(', ')}</span><span style="color:#8fa0c8"> — so prices, subtotals, the percentages and which shop counts as cheapest are all what <i>you</i> pay. Shelf prices are struck through. Edit under ⚙ Stores.</span>`:''}      ${unchecked?`<br><span class="warn">${unchecked} card${unchecked===1?'':'s'} in scope have not been stock-checked yet — this list is incomplete until they are.</span>`:''}
     </div>
     <div class="acts" style="margin-top:9px">
       <button onclick="sweepShopping(this)">${unchecked?`Check the ${unchecked} unchecked`:'Re-check everything'}</button>${stockDrift?`
@@ -1792,7 +1850,7 @@ function renderShopping(){
   }
   stores.forEach(store=>{
     const rows=byStore[store];
-    const sum=rows.reduce((t,r)=>t+(r.h.price||0),0);
+    const sum=rows.reduce((t,r)=>t+(netOf(r.h)||0),0);
     SHOP_TXT[store]=shopPlain(store,rows);
     html+=`<div class="shop-store"><h3>${store}
         <span><span class="n">${rows.length} card${rows.length===1?'':'s'} · $${sum.toFixed(2)}</span>
@@ -1814,22 +1872,23 @@ function renderShopping(){
       /* What the condition saves against a clean copy: asking price vs NM here. Neutral
          colour -- a big saving on a Heavily Played card is par, not a bargain, and that
          judgement is what the percentage on Price is for. */
+      const net=netOf(r.h);                       // what you actually pay
       let save='';
-      if(mktNmHere&&r.h.price!=null&&mktNmHere>0.01){
-        const d=Math.round((r.h.price/mktNmHere-1)*100);
+      if(mktNmHere&&net!=null&&mktNmHere>0.01){
+        const d=Math.round((net/mktNmHere-1)*100);
         if(Math.abs(d)>=5) save=`<span class="dl sv"
-          title="This copy asks ${d<0?`C$${(mktNmHere-r.h.price).toFixed(2)} less than`:`C$${(r.h.price-mktNmHere).toFixed(2)} more than`} a Near Mint one normally costs here">${d<0?'':'+'}${d}%</span>`;
+          title="This copy costs you ${d<0?`C$${(mktNmHere-net).toFixed(2)} less than`:`C$${(net-mktNmHere).toFixed(2)} more than`} a Near Mint one normally costs here">${d<0?'':'+'}${d}%</span>`;
       }
       const mktAtCond=condMarket(mkt,r.h.cond);   // null when the condition is unknown
       let delta='';
-      if(mktAtCond&&r.h.price!=null&&mktAtCond>0.01){
-        const d=Math.round((r.h.price/mktAtCond-1)*100);
+      if(mktAtCond&&net!=null&&mktAtCond>0.01){
+        const d=Math.round((net/mktAtCond-1)*100);
         if(Math.abs(d)>=5) delta=`<span class="dl ${d<0?'under':'over'}"
           title="Typical here for ${r.h.cond} is C$${mktAtCond.toFixed(2)}">${d<0?'':'+'}${d}%</span>`;
       }
       const elsewhere=r.alts.length
         ? `<span class="alt">elsewhere: ${r.alts.map(a=>
-            `<a href="${a.url}" target="_blank" rel="noopener">${a.store}</a> $${a.price!=null?a.price.toFixed(2):'?'}${a.cond?` <i>${a.cond}</i>`:''}`
+            `<a href="${a.url}" target="_blank" rel="noopener">${a.store}</a> $${a.price!=null?a.price.toFixed(2):'?'}${a.list!=null&&a.price!=null&&a.list>a.price+1e-9?` <s class="was">$${a.list.toFixed(2)}</s>`:''}${a.cond?` <i>${a.cond}</i>`:''}`
            ).join(' · ')}</span>` : '';
       html+=`<div class="shop-row${r.isLowest&&r.alts.length?' best':''}">
         <span class="g">${r.g.title}</span>
@@ -1839,7 +1898,7 @@ function renderShopping(){
         <span class="cd">${r.h.cond||''}</span>
         <span class="mk" title="What a Near Mint copy normally costs in Canada — TCGplayer US market for this printing (Near Mint anchored) at ${FX}, plus the measured ${Math.round((CAD_PREMIUM-1)*100)}% local premium. The percentage is what this copy saves against a clean one.">${mktNmHere!=null?'C$'+mktNmHere.toFixed(2):'—'} ${save}</span>
         <span class="mk mc" title="${r.h.cond?`What a ${r.h.cond} copy normally costs in Canada — NM here x ${COND_MULT[r.h.cond]||'?'}, the median ${r.h.cond}/NM price ratio measured across 215 shop listings. The percentage compares the asking price with this figure.`:'Condition not recognised — no percentage shown'}">${mktAtCond!=null?'C$'+mktAtCond.toFixed(2):'—'}</span>
-        <span class="pr">$${r.h.price!=null?r.h.price.toFixed(2):'?'} ${delta}</span>
+        <span class="pr">${priceHtml(r.h)} ${delta}</span>
         ${elsewhere}
       </div>`;
     });
@@ -1905,6 +1964,7 @@ function refreshAll(){
   if(view==='ph') renderPlaceholders();
   if(view==='binder'){renderBinder(); renderChecklist();}
   else {renderChecklist(); renderBinder();}
+  if(view==='shop') renderShopping();   // FX and store discounts must repaint it
 }
 
 /* ---------------- orphaned-mark detector ----------------
@@ -2261,6 +2321,9 @@ document.getElementById('oneEach').classList.toggle('on',oneOfEach);
 try{const _ex=JSON.parse(localStorage.getItem('excludedSpecies_v1')||'[]');
      if(Array.isArray(_ex)) excluded=new Set(_ex);}catch(e){}
 try{const _fx=parseFloat(localStorage.getItem('fxRate_v1')); if(isFinite(_fx)&&_fx>0) FX=_fx;}catch(e){}
+try{const _d=JSON.parse(localStorage.getItem('storeDisc_v1')||'{}');
+    if(_d&&typeof _d==='object') STORE_DISC=_d;}catch(e){}
+rebuildDiscIndex();
 document.getElementById('fxRate').value=FX;
 document.getElementById('fxRate').onchange=e=>setFx(e.target.value);
 try{setCameoMode(localStorage.getItem('cameoMode_v1')||'end');}catch(e){}
