@@ -156,8 +156,18 @@ body.pg4 .pocket .price,body.pg4 .pocket .num{font-size:11px;bottom:40px}
 .shop-store>h3 .n{color:#9ee6c0;font-weight:700;text-transform:none;letter-spacing:0}
 .shop-store>h3 button{font-size:10.5px;padding:3px 9px;border-radius:6px;background:#26325a;
   border:1px solid #3a4a80;color:#cfd8ff;cursor:pointer}
-.shop-row{display:grid;grid-template-columns:88px 1fr 150px 34px 34px 74px;gap:8px;align-items:baseline;
+.shop-row{display:grid;grid-template-columns:88px 1fr 150px 34px 34px 74px 88px;gap:8px;align-items:baseline;
   padding:6px 14px;border-top:1px solid #1c2444;font-size:12px}
+.shop-row.best{background:rgba(61,220,151,.045)}
+.shop-row .mk{text-align:right;color:#7f90b8;font-size:11px}
+.shop-row .dl{font-size:9.5px;font-weight:700}
+.shop-row .dl.under{color:#3ddc97}
+.shop-row .dl.over{color:#ffb347}
+.shop-row .tag-best{font-size:9px;font-weight:800;letter-spacing:.4px;color:#3ddc97;
+  border:1px solid rgba(61,220,151,.4);border-radius:4px;padding:1px 4px;margin-left:5px}
+.shop-row .alt{grid-column:2/8;color:#66739a;font-size:10.5px;margin:1px 0 2px}
+.shop-row .alt a{color:#7f90b8;text-decoration:none}
+.shop-row .alt a:hover{color:#9fb4e6;text-decoration:underline}
 .shop-row:hover{background:#171736}
 .shop-row .g{color:#6678aa;font-size:11px;text-transform:uppercase;letter-spacing:.4px}
 .shop-row .nm a{color:#dfe6ff;text-decoration:none;font-weight:600}
@@ -167,8 +177,9 @@ body.pg4 .pocket .price,body.pg4 .pocket .num{font-size:11px;bottom:40px}
 .shop-row .vt{font-size:9.5px;color:#9fb4e6}
 .shop-row .cd{font-size:9.5px;color:#7f90b8}
 .shop-row .also{color:#6b7699;font-size:10px}
-@media(max-width:700px){.shop-row{grid-template-columns:1fr 62px;gap:2px 8px}
-  .shop-row .g,.shop-row .st{grid-column:1/3}}
+@media(max-width:700px){.shop-row{grid-template-columns:1fr 74px;gap:2px 8px}
+  .shop-row .g,.shop-row .st,.shop-row .alt{grid-column:1/3}
+  .shop-row .mk{text-align:left;grid-column:1/2}}
 footer{max-width:1180px;margin:0 auto;padding:20px 14px 50px;font-size:11px;color:#666688;line-height:1.7}
 #toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#1c2b1c;border:1px solid #3ddc97;color:#9ee6c0;padding:8px 16px;border-radius:8px;font-size:12px;opacity:0;transition:opacity .3s;pointer-events:none;z-index:200}
 #toast.show{opacity:1}
@@ -1664,8 +1675,13 @@ function shoppingRows(){
     const best={};
     rankOffers(live).forEach(h=>{ if(!best[h.store]) best[h.store]=h; });
     perKey[p.key]=Object.keys(best).length;
+    const all=Object.entries(best).map(([store,h])=>({store,price:h.price,cond:h.cond,url:h.url}))
+                    .sort((a,b)=>(a.price??1e9)-(b.price??1e9));
+    const low=all.length?all[0].price:null;
     Object.entries(best).forEach(([store,h])=>{
-      (byStore[store]=byStore[store]||[]).push({g,p,h});
+      (byStore[store]=byStore[store]||[]).push({g,p,h,
+        alts:all.filter(a=>a.store!==store),      // the same card elsewhere, in stock
+        isLowest:h.price!=null&&low!=null&&h.price<=low+1e-9});
     });
   });
   const gorder={}; DATA.groups.forEach((g,i)=>gorder[g.id]=i);
@@ -1677,8 +1693,12 @@ function shoppingRows(){
           scope:scope.length};
 }
 function shopPlain(store,rows){
-  return rows.map(r=>`${r.p.c.n} — ${r.p.c.set} ${r.p.c.num}${r.p.c.tot?'/'+r.p.c.tot:''}`
-    +` (${r.p.v.l})  $${r.h.price!=null?r.h.price.toFixed(2):'?'}`).join('\n');
+  return rows.map(r=>{
+    const mkt=r.p.v.p!=null?`  market ${money(r.p.v.p)}`:'';
+    const alt=r.alts.length?`  [also ${r.alts.map(a=>a.store+' $'+(a.price!=null?a.price.toFixed(2):'?')).join(', ')}]`:'';
+    return `${r.p.c.n} — ${r.p.c.set} ${r.p.c.num}${r.p.c.tot?'/'+r.p.c.tot:''}`
+      +` (${r.p.v.l})  $${r.h.price!=null?r.h.price.toFixed(2):'?'}${mkt}${alt}`;
+  }).join('\n');
 }
 let SHOP_TXT={};
 function copyStoreList(store){
@@ -1719,13 +1739,28 @@ function renderShopping(){
         <button onclick="copyStoreList('${store.replace(/'/g,"\\'")}')">copy</button></span></h3>`;
     rows.forEach(r=>{
       const also=perKey[r.p.key]>1?`<span class="also">also at ${perKey[r.p.key]-1}</span>`:'';
-      html+=`<div class="shop-row">
+      /* Market is the TCGplayer US figure converted at the toolbar rate — the same
+         number the pocket shows. The store price is real CAD, so comparing them is
+         the useful signal: is this a good buy, or am I paying over the odds? */
+      const mkt=r.p.v.p, mktCad=mkt!=null?mkt*FX:null;
+      let delta='';
+      if(mktCad&&r.h.price!=null&&mktCad>0.01){
+        const d=Math.round((r.h.price/mktCad-1)*100);
+        if(Math.abs(d)>=5) delta=`<span class="dl ${d<0?'under':'over'}">${d<0?'':'+'}${d}%</span>`;
+      }
+      const elsewhere=r.alts.length
+        ? `<span class="alt">elsewhere: ${r.alts.map(a=>
+            `<a href="${a.url}" target="_blank" rel="noopener">${a.store}</a> $${a.price!=null?a.price.toFixed(2):'?'}${a.cond?` <i>${a.cond}</i>`:''}`
+           ).join(' · ')}</span>` : '';
+      html+=`<div class="shop-row${r.isLowest&&r.alts.length?' best':''}">
         <span class="g">${r.g.title}</span>
-        <span class="nm"><a href="${r.h.url}" target="_blank" rel="noopener">${r.p.c.n}</a> ${also}</span>
+        <span class="nm"><a href="${r.h.url}" target="_blank" rel="noopener">${r.p.c.n}</a>${r.isLowest&&r.alts.length?' <span class="tag-best">cheapest</span>':''}</span>
         <span class="st">${r.p.c.set} ${r.p.c.num}${r.p.c.tot?'/'+r.p.c.tot:''}</span>
         <span class="vt">${r.p.v.s}</span>
         <span class="cd">${r.h.cond||''}</span>
-        <span class="pr">$${r.h.price!=null?r.h.price.toFixed(2):'?'}</span>
+        <span class="mk" title="TCGplayer US market, converted at ${FX}">${money(mkt)}</span>
+        <span class="pr">$${r.h.price!=null?r.h.price.toFixed(2):'?'} ${delta}</span>
+        ${elsewhere}
       </div>`;
     });
     html+='</div>';
