@@ -145,6 +145,30 @@ body.pg4 .pocket .price,body.pg4 .pocket .num{font-size:11px;bottom:40px}
 #tabPicker.open{display:block}
 #tabPicker .lab{font-size:11px;color:#8f9ac4;text-transform:uppercase;letter-spacing:.8px;margin-right:8px}
 #tabPicker .hint{display:block;color:#6b7699;font-size:11px;margin-top:7px}
+#shoplist{display:none}
+.shop-head{background:#14142c;border:1px solid #262650;border-radius:10px;padding:12px 15px;margin-bottom:14px}
+.shop-head h2{font-size:15px;color:#dfe6ff;margin:0 0 4px}
+.shop-head .sub{font-size:12px;color:#8f9ac4;line-height:1.6}
+.shop-head .warn{color:#ffb347}
+.shop-store{margin:0 0 18px;border:1px solid #262650;border-radius:10px;overflow:hidden}
+.shop-store>h3{background:#1b1b3a;margin:0;padding:9px 14px;font-size:12.5px;color:#dfe6ff;
+  letter-spacing:.6px;text-transform:uppercase;display:flex;justify-content:space-between;gap:10px;align-items:center}
+.shop-store>h3 .n{color:#9ee6c0;font-weight:700;text-transform:none;letter-spacing:0}
+.shop-store>h3 button{font-size:10.5px;padding:3px 9px;border-radius:6px;background:#26325a;
+  border:1px solid #3a4a80;color:#cfd8ff;cursor:pointer}
+.shop-row{display:grid;grid-template-columns:88px 1fr 150px 34px 34px 74px;gap:8px;align-items:baseline;
+  padding:6px 14px;border-top:1px solid #1c2444;font-size:12px}
+.shop-row:hover{background:#171736}
+.shop-row .g{color:#6678aa;font-size:11px;text-transform:uppercase;letter-spacing:.4px}
+.shop-row .nm a{color:#dfe6ff;text-decoration:none;font-weight:600}
+.shop-row .nm a:hover{text-decoration:underline}
+.shop-row .st{color:#8fa0c8;font-size:11px}
+.shop-row .pr{font-weight:700;text-align:right;color:#9ee6c0}
+.shop-row .vt{font-size:9.5px;color:#9fb4e6}
+.shop-row .cd{font-size:9.5px;color:#7f90b8}
+.shop-row .also{color:#6b7699;font-size:10px}
+@media(max-width:700px){.shop-row{grid-template-columns:1fr 62px;gap:2px 8px}
+  .shop-row .g,.shop-row .st{grid-column:1/3}}
 footer{max-width:1180px;margin:0 auto;padding:20px 14px 50px;font-size:11px;color:#666688;line-height:1.7}
 #toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#1c2b1c;border:1px solid #3ddc97;color:#9ee6c0;padding:8px 16px;border-radius:8px;font-size:12px;opacity:0;transition:opacity .3s;pointer-events:none;z-index:200}
 #toast.show{opacity:1}
@@ -219,6 +243,13 @@ body.pg4 .pocket .foot .stockline{font-size:9.5px}
 @media print{
   body{background:#fff;color:#000}
   header,.toolbar,.tabs,#tabPicker,footer,#binder,.notes,.ph-bar,#speciesBar,#toast,.modal{display:none!important}
+  body.printing-shop #checklist{display:none!important}
+  body.printing-shop #shoplist{display:block!important}
+  body.printing-shop .shop-store,body.printing-shop .shop-head{border-color:#999;background:#fff}
+  body.printing-shop .shop-store>h3{background:#eee;color:#000}
+  body.printing-shop .shop-row{color:#000;border-color:#ccc}
+  body.printing-shop .shop-row .nm a,body.printing-shop .shop-row .pr{color:#000}
+  body.printing-shop .shop-store>h3 button{display:none}
   #checklist{display:block!important}
   /* placeholder mode wins: hide the checklist and print card-size cut sheets */
   body.printing-ph #checklist{display:none!important}
@@ -293,6 +324,7 @@ body.pg4 .pocket .foot .stockline{font-size:9.5px}
     <button id="viewBinder" class="on">Binder</button>
     <button id="viewList">Checklist</button>
     <button id="viewPh">Placeholders</button>
+    <button id="viewShop" title="Everything you still need that is in stock right now, grouped by store">🛒 Shopping list</button>
     <span class="sep"></span>
     <button id="oneEach" title="Collapse every card to a single pocket — one of each unique artwork, dropping reverse holo, 1st Edition and other duplicate printings">1 per card</button>
     <button onclick="window.print()">Print</button>
@@ -316,6 +348,7 @@ body.pg4 .pocket .foot .stockline{font-size:9.5px}
   <div id="binder"></div>
   <div id="checklist"></div>
   <div id="placeholders"></div>
+  <div id="shoplist"></div>
 </main>
 
 <footer>
@@ -1061,7 +1094,17 @@ const _PRINT_LABEL={reverse:'RH','1st':'1st Ed',unlimited:'Unlimited',pokeball:'
    pricing and will quote US dollars to a request they geolocate as American. */
 async function fetchProduct(store,handle,signal){
   const url=`https://${store.host}/products/${encodeURIComponent(handle)}.js?country=CA`;
-  const r=await fetch(url,{signal,cache:'no-store'});
+  let r;
+  try{
+    r=await fetch(url,{signal,cache:'no-store'});
+  }catch(e){
+    if(e.name==='AbortError') throw e;
+    /* A delisted product answers with Shopify's 404 *page*, which carries no CORS
+       header — so the fetch rejects instead of returning a readable 404. That is a
+       dead handle, not an unreachable store, and calling it a store failure both
+       misreports it and hides the real signal that the index wants rebuilding. */
+    return null;
+  }
   if(r.status===404) return null;                 // handle drifted — see stockDrift
   if(!r.ok) throw new Error(store.name+' HTTP '+r.status);
   const d=await r.json();
@@ -1590,6 +1633,128 @@ function rarityNotes(tab,ps){
   </ul>`;
 }
 
+/* ── Shopping list ──────────────────────────────────────────────────────────
+   The inverse of a stock badge: across everything currently being worked on,
+   what can actually be bought today, and from whom. Honours every filter already
+   on screen — the ⚙ Guides picker, the Include chips, the cameo toggle, "1 per
+   card" — because it reads through pockets() rather than the raw data. */
+function shopScope(){
+  const out=[];
+  visibleGroups().forEach(g=>{
+    pockets(g.id).forEach(p=>{
+      if(p.custom) return;
+      if(statusOf(p.key)!=='') return;          // owned or ordered: not wanted
+      out.push({g,p});
+    });
+  });
+  return out;
+}
+function shoppingRows(){
+  const scope=shopScope();
+  const byStore={}, unchecked=new Set(), checkedCards=new Set();
+  const perKey={};                              // pocket -> stores stocking it
+  scope.forEach(({g,p})=>{
+    const e=stockGet(p.c);
+    if(!e){ unchecked.add(stockId(p.c)); return; }
+    checkedCards.add(stockId(p.c));
+    const want=wantPrinting(p.v.k);
+    const live=e.hits.filter(h=>h.printing===want && h.available);
+    if(!live.length) return;
+    // cheapest qualifying offer at each store that has it
+    const best={};
+    rankOffers(live).forEach(h=>{ if(!best[h.store]) best[h.store]=h; });
+    perKey[p.key]=Object.keys(best).length;
+    Object.entries(best).forEach(([store,h])=>{
+      (byStore[store]=byStore[store]||[]).push({g,p,h});
+    });
+  });
+  const gorder={}; DATA.groups.forEach((g,i)=>gorder[g.id]=i);
+  Object.values(byStore).forEach(rows=>rows.sort((a,b)=>
+    (gorder[a.g.id]-gorder[b.g.id]) ||
+    String(a.p.c.d||'').localeCompare(String(b.p.c.d||'')) ||
+    (parseInt(a.p.c.num,10)||0)-(parseInt(b.p.c.num,10)||0)));
+  return {byStore, perKey, unchecked:unchecked.size, checked:checkedCards.size,
+          scope:scope.length};
+}
+function shopPlain(store,rows){
+  return rows.map(r=>`${r.p.c.n} — ${r.p.c.set} ${r.p.c.num}${r.p.c.tot?'/'+r.p.c.tot:''}`
+    +` (${r.p.v.l})  $${r.h.price!=null?r.h.price.toFixed(2):'?'}`).join('\n');
+}
+let SHOP_TXT={};
+function copyStoreList(store){
+  const txt=SHOP_TXT[store]||'';
+  const done=()=>toast(`Copied ${txt.split('\n').filter(Boolean).length} cards for ${store}.`);
+  if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(done,done);
+  else done();
+}
+function renderShopping(){
+  const {byStore,perKey,unchecked,checked,scope}=shoppingRows();
+  SHOP_TXT={};
+  const stores=Object.keys(byStore).sort((a,b)=>byStore[b].length-byStore[a].length);
+  const totalCards=new Set(Object.values(byStore).flat().map(r=>r.p.key)).size;
+  const guides=visibleGroups().map(g=>g.title).join(', ');
+  let html=`<div class="shop-head">
+    <h2>🛒 ${totalCards} card${totalCards===1?'':'s'} you still need are in stock right now</h2>
+    <div class="sub">Across <b>${guides}</b> — ${scope} unowned pocket${scope===1?'':'s'} in scope,
+      spread over ${stores.length} store${stores.length===1?'':'s'}.
+      Only the printing each pocket actually needs counts, so a reverse holo is never
+      filled by the normal print. Prices are the stores' own CAD.
+      ${unchecked?`<br><span class="warn">${unchecked} card${unchecked===1?'':'s'} in scope have not been stock-checked yet — this list is incomplete until they are.</span>`:''}
+    </div>
+    <div class="acts" style="margin-top:9px">
+      <button onclick="sweepShopping(this)">${unchecked?`Check the ${unchecked} unchecked`:'Re-check everything'}</button>${stockDrift?`
+      <span style="color:#a0a0b8;font-size:11px;margin-left:8px">${stockDrift} dead product link${stockDrift===1?'':'s'} skipped — re-run tools/build-handle-index.py to refresh</span>`:''}
+      <button onclick="window.print()">Print list</button>
+    </div></div>`;
+  if(!stores.length){
+    html+=`<div class="notes">Nothing to buy from the indexed stores right now — either everything
+      in scope is owned, or none of it is in stock. ${unchecked?'Run the check above first.':''}</div>`;
+  }
+  stores.forEach(store=>{
+    const rows=byStore[store];
+    const sum=rows.reduce((t,r)=>t+(r.h.price||0),0);
+    SHOP_TXT[store]=shopPlain(store,rows);
+    html+=`<div class="shop-store"><h3>${store}
+        <span><span class="n">${rows.length} card${rows.length===1?'':'s'} · $${sum.toFixed(2)}</span>
+        <button onclick="copyStoreList('${store.replace(/'/g,"\\'")}')">copy</button></span></h3>`;
+    rows.forEach(r=>{
+      const also=perKey[r.p.key]>1?`<span class="also">also at ${perKey[r.p.key]-1}</span>`:'';
+      html+=`<div class="shop-row">
+        <span class="g">${r.g.title}</span>
+        <span class="nm"><a href="${r.h.url}" target="_blank" rel="noopener">${r.p.c.n}</a> ${also}</span>
+        <span class="st">${r.p.c.set} ${r.p.c.num}${r.p.c.tot?'/'+r.p.c.tot:''}</span>
+        <span class="vt">${r.p.v.s}</span>
+        <span class="cd">${r.h.cond||''}</span>
+        <span class="pr">$${r.h.price!=null?r.h.price.toFixed(2):'?'}</span>
+      </div>`;
+    });
+    html+='</div>';
+  });
+  document.getElementById('shoplist').innerHTML=html;
+}
+/* Deliberately a button: ~6,000 requests should never fire because a tab was clicked. */
+async function sweepShopping(btn){
+  const cards=[...new Map(shopScope().filter(x=>!x.p.custom)
+      .map(x=>[stockId(x.p.c),x.p.c])).values()];
+  if(!cards.length){ toast('Nothing in scope.'); return; }
+  abortStock();
+  const ac=new AbortController(); stockRun=ac;
+  btn.disabled=true;
+  const accs=new Map(cards.map(c=>[stockId(c),{t:Date.now(),hits:[],failed:[]}]));
+  const jobs=[];
+  cards.forEach(c=>STORES.forEach(st=>
+    jobs.push(async()=>stockLookupOne(c,st,accs.get(stockId(c)),ac.signal))));
+  let done=0; const total=jobs.length;
+  await runQueue(jobs,STOCK_MAX_INFLIGHT,()=>{
+    done++; if(done%25===0||done===total) btn.textContent=`Checking ${done}/${total}…`;
+  });
+  if(ac.signal.aborted) return;
+  accs.forEach((v,k)=>{ stockCache[k]=v; });
+  stockRun=null; stockSave(); btn.disabled=false;
+  renderShopping();
+  toast(`Checked ${cards.length} cards.`);
+}
+
 /* stats */
 function totalPages(){
   let n=0;
@@ -1935,15 +2100,20 @@ function setView(v){
   document.getElementById('viewBinder').classList.toggle('on',v==='binder');
   document.getElementById('viewList').classList.toggle('on',v==='list');
   document.getElementById('viewPh').classList.toggle('on',v==='ph');
+  document.getElementById('viewShop').classList.toggle('on',v==='shop');
   document.getElementById('binder').style.display=v==='binder'?'block':'none';
   document.getElementById('checklist').style.display=v==='list'?'block':'none';
   document.getElementById('placeholders').style.display=v==='ph'?'block':'none';
+  document.getElementById('shoplist').style.display=v==='shop'?'block':'none';
   document.getElementById('notes').style.display=v==='binder'?'block':'none';
   document.body.classList.toggle('printing-ph',v==='ph');
+  document.body.classList.toggle('printing-shop',v==='shop');
   if(v==='ph') renderPlaceholders();
+  if(v==='shop') renderShopping();
 }
 document.getElementById('cameoMode').onchange=e=>setCameoMode(e.target.value);
 document.getElementById('pageSize').onchange=e=>setPageSize(+e.target.value);
+document.getElementById('viewShop').onclick=()=>setView('shop');
 document.getElementById('viewBinder').onclick=()=>setView('binder');
 document.getElementById('viewList').onclick=()=>setView('list');
 document.getElementById('viewPh').onclick=()=>setView('ph');
