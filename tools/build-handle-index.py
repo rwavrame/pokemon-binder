@@ -234,13 +234,13 @@ def guide_cards():
     src = HTML.read_text(encoding='utf-8')
     i = src.index('const DATA = {'); j = src.index('};', i)
     D = json.loads(src[i + len('const DATA = '):j + 1])
-    for key in ('MORII_SPECIES', 'KOMIYA_SPECIES', 'RARITY_SPECIES'):
-        try:
-            k = src.index(f'const {key} = ')
-            e = src.index(';\nObject.assign', k)
-            D['species'].update(json.loads(src[k + len(f'const {key} = '):e]))
-        except ValueError:
-            pass
+    # Every artist/rarity/expansion set is appended to DATA.species after the fact.
+    # Discovered rather than listed, so a new one cannot be silently left out of the
+    # sweep -- which is exactly how Pitch Black would have been missed.
+    for key in re.findall(r'const ([A-Z0-9_]+_SPECIES) = ', src):
+        k = src.index(f'const {key} = ') + len(f'const {key} = ')
+        e = src.index(f';\nObject.assign(DATA.species, {key})', k)
+        D['species'].update(json.loads(src[k:e]))
     cards, seen = [], set()
     for s in D['species'].values():
         for c in s['cards']:
