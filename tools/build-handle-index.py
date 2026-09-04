@@ -20,17 +20,24 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 HTML = ROOT / 'master-set-binder.html'
 OUT  = ROOT / 'tools' / 'handles.json'
 
-STORES = [  # id must match STORES[] in the HTML
-    ('401',    'store.401games.ca'),
-    ('lug',    'levelupgames.ca'),
-    ('exor',   'exorgames.com'),
-    ('chim',   'chimeragamingonline.com'),
-    ('obs',    'obsidiangames.ca'),
-    ('f2f',    'facetofacegames.com'),
-    ('hob',    'hobbiesville.com'),
-    ('hoc',    'houseofcards.ca'),
-    ('dog',    'deckoutgaming.ca'),
-]
+def store_list():
+    """The shops to sweep, read from the STORES array in the HTML.
+
+    Kept here as a copy once, with a comment saying the ids had to match. That is the
+    same trap that would have skipped Pitch Black: a store added to one list and not
+    the other is never swept, and nothing reports it -- the run just quietly does not
+    look there. One source of truth instead.
+    """
+    src = HTML.read_text(encoding='utf-8')
+    i = src.index('const STORES=[')
+    j = src.index('];', i)
+    found = re.findall(r"id:'([^']+)'\s*,\s*name:'[^']*'\s*,\s*host:'([^']+)'", src[i:j])
+    if not found:
+        sys.exit('could not parse STORES out of the HTML')
+    return found
+
+
+STORES = store_list()
 
 # ---------- fetch -----------------------------------------------------------
 # Shopify rate-limits these feeds hard. A first run without pacing got HTTP 429 from
@@ -217,7 +224,11 @@ def matches(card, title, sib_ann):
         return False
     # A title that never states a total (Deck Out writes "Slowpoke (81)") is matched on
     # the number alone, so make the set corroborate it or 81 matches 81 from any set.
-    if want_t and not saw_total:
+    # Lettered numbers are exempt: SM109 or GG34 identifies a card on its own, the way a
+    # bare 81 never can. Demanding corroboration from them cost 305 real listings across
+    # 121 cards -- promos, mostly, where the guide says "SM Black Star Promos" and every
+    # shop writes "Promo", so the words never intersect and a correct match was binned.
+    if want_t and not saw_total and not lettered:
         st = {t for t in toks(card.get('set', '')) if len(t) > 2}
         if st and not (st & tt):
             return False
