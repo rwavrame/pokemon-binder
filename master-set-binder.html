@@ -180,7 +180,14 @@ body.pg4 .pocket .price,body.pg4 .pocket .num{font-size:11px;bottom:40px}
 .shop-row .dl.over{color:#ffb347}
 .shop-row .dl.sv{color:#7d88ad;font-weight:600}
 .shop-sort{font-size:12px;color:#8fa0c8;display:inline-flex;align-items:center;gap:6px;margin-right:4px}
-.shop-sort select{padding:5px 7px;background:#1e1e40;border:1px solid #333;color:#ddd;border-radius:6px;font-size:12px}
+.shop-sort select,.shop-sort input{padding:5px 7px;background:#1e1e40;border:1px solid #333;color:#ddd;border-radius:6px;font-size:12px}
+.shop-sort input[type=checkbox]{padding:0;width:14px;height:14px;accent-color:#3ddc97}
+.shop-filter{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:11px;
+  padding-top:10px;border-top:1px solid #262650}
+.shop-filter .lnk{background:none;border:none;color:#7ea6ff;cursor:pointer;font-size:12px;text-decoration:underline;padding:0}
+.shop-stores{flex-basis:100%;display:flex;gap:5px;flex-wrap:wrap}
+.shop-stores .species-chip{font-size:11px;padding:3px 8px}
+.shop-hid{flex-basis:100%;color:#a0a0b8;font-size:11px}
 .was{text-decoration:line-through;color:#66739a;font-size:10px;font-weight:400;margin-left:1px}
 .shop-row .tag-best{font-size:9px;font-weight:800;letter-spacing:.4px;color:#3ddc97;
   border:1px solid rgba(61,220,151,.4);border-radius:4px;padding:1px 4px;margin-left:5px}
@@ -283,7 +290,7 @@ body.pg4 .pocket .foot .stockline{font-size:9.5px}
   body.printing-shop .shop-row .nm a,body.printing-shop .shop-row .pr{color:#000}
   body.printing-shop .was{color:#666}
   body.printing-shop .shop-store>h3 button{display:none}
-  body.printing-shop .shop-sort{display:none}
+  body.printing-shop .shop-sort,body.printing-shop .shop-filter{display:none}
   #checklist{display:block!important}
   /* placeholder mode wins: hide the checklist and print card-size cut sheets */
   body.printing-ph #checklist{display:none!important}
@@ -1823,6 +1830,14 @@ function shoppingRows(){
         isLowest:netOf(h)!=null&&low!=null&&netOf(h)<=low+1e-9});
     });
   });
+  /* Filter after the cross-store comparison, never before it: `alts`, `isLowest` and
+     the cheapest tag are worked out over every shop, so hiding a store narrows what you
+     see without quietly changing which listing is genuinely the cheapest. */
+  let hidden=0;
+  Object.keys(byStore).forEach(k=>{
+    const keep=byStore[k].filter(r=>{const ok=shopRowPasses(r); if(!ok) hidden++; return ok;});
+    if(keep.length) byStore[k]=keep; else delete byStore[k];
+  });
   const gorder={}; DATA.groups.forEach((g,i)=>gorder[g.id]=i);
   /* Default keeps the guide's own order -- tab, then release date, then number -- so the
      list reads in the same sequence as the binder. Every other sort ignores the guide
@@ -1831,7 +1846,7 @@ function shoppingRows(){
     || ((a,b)=>(gorder[a.g.id]-gorder[b.g.id])||_sSet(a,b));
   Object.values(byStore).forEach(rows=>rows.sort(cmp));
   return {byStore, perKey, unchecked:unchecked.size, checked:checkedCards.size,
-          scope:scope.length};
+          scope:scope.length, hidden};
 }
 /* Row sorts for the shopping list. Each is a comparator over the {g,p,h} rows that
    shoppingRows builds. Money is read through the same helpers the rendering uses, so a
@@ -1856,6 +1871,53 @@ const SHOP_SORTS={
          f:(a,b)=>_num(_sRatio(a,_sCond),_sRatio(b,_sCond))||_sName(a,b)},
   save :{l:'Biggest saving vs NM',f:(a,b)=>_num(_sRatio(a,_sNm),_sRatio(b,_sNm))||_sName(a,b)}
 };
+/* Filters. `stores:null` means every shop -- an empty array would mean "show nothing",
+   and the two must not be confused when the saved state is read back. */
+const SHOP_FILTER_DEFAULT={q:'',stores:null,cond:'any',max:null,deals:false};
+let shopFilter={...SHOP_FILTER_DEFAULT};
+try{const v=JSON.parse(localStorage.getItem('shopFilter_v1')||'null');
+    if(v&&typeof v==='object') shopFilter={...SHOP_FILTER_DEFAULT,...v};}catch(e){}
+const COND_FLOOR={any:99, NM:0, LP:1, MP:2, HP:3};
+function shopFilterOn(){
+  const f=shopFilter;
+  return !!(f.q||f.stores||f.cond!=='any'||f.max!=null||f.deals);
+}
+/* One row, against every active filter. Kept separate from shoppingRows so the
+   "N hidden" count can be taken by running it over the unfiltered rows. */
+function shopRowPasses(r){
+  const f=shopFilter;
+  if(f.stores && !f.stores.includes(r.h.store)) return false;
+  if(f.cond!=='any'){
+    const rank=_COND_RANK[r.h.cond];
+    if(rank==null || rank>COND_FLOOR[f.cond]) return false;   // '' ranks 5, so unknown is hidden
+  }
+  const net=netOf(r.h);
+  if(f.max!=null && (net==null || net>f.max)) return false;
+  if(f.deals){
+    const m=condMarket(r.p.v.p,r.h.cond);
+    if(!(m&&net!=null&&m>0.01&&net<m)) return false;          // no figure -> not a known deal
+  }
+  if(f.q){
+    const q=f.q.toLowerCase();
+    const hay=`${r.p.c.n} ${r.p.c.set} ${r.p.c.num} ${r.p.v.l} ${r.g.title}`.toLowerCase();
+    if(!hay.includes(q)) return false;
+  }
+  return true;
+}
+function setShopFilter(patch){
+  shopFilter={...shopFilter,...patch};
+  try{localStorage.setItem('shopFilter_v1',JSON.stringify(shopFilter));}catch(e){}
+  renderShopping();
+}
+function clearShopFilter(){ setShopFilter({...SHOP_FILTER_DEFAULT}); }
+let _shopQT=null;
+function shopQTyped(v){ clearTimeout(_shopQT); _shopQT=setTimeout(()=>setShopFilter({q:v}),220); }
+function toggleShopStore(name){
+  const all=STORES.map(s=>s.name);
+  const cur=shopFilter.stores||all;
+  const next=cur.includes(name)?cur.filter(x=>x!==name):[...cur,name];
+  setShopFilter({stores:next.length===all.length?null:next});
+}
 let shopSort='set';
 try{const v=localStorage.getItem('shopSort_v1'); if(v&&SHOP_SORTS[v]) shopSort=v;}catch(e){}
 function setShopSort(v){
@@ -1904,7 +1966,7 @@ function copyStoreList(store){
   else done();
 }
 function renderShopping(){
-  const {byStore,perKey,unchecked,checked,scope}=shoppingRows();
+  const {byStore,perKey,unchecked,checked,scope,hidden}=shoppingRows();
   SHOP_TXT={};
   const stores=Object.keys(byStore).sort((a,b)=>byStore[b].length-byStore[a].length);
   const totalCards=new Set(Object.values(byStore).flat().map(r=>r.p.key)).size;
@@ -1928,6 +1990,27 @@ function renderShopping(){
       green is genuinely cheap and amber is over the odds. A big grey saving with an amber price means
       the discount looks generous but is not, for a card in that state.
       ${Object.keys(STORE_DISC).length?`<br><span style="color:#3ddc97">Your discount is applied throughout — ${STORES.filter(x=>STORE_DISC[x.id]).map(x=>`${x.name} ${Math.round(STORE_DISC[x.id]*100)}%</span><span style="color:#3ddc97">`).join(', ')}</span><span style="color:#8fa0c8"> — so prices, subtotals, the percentages and which shop counts as cheapest are all what <i>you</i> pay. Shelf prices are struck through. Edit under ⚙ Stores.</span>`:''}      ${unchecked?`<br><span class="warn">${unchecked} card${unchecked===1?'':'s'} in scope have not been stock-checked yet — this list is incomplete until they are.</span>`:''}
+    </div>
+    <div class="shop-filter">
+      <label class="shop-sort">Find
+        <input type="search" id="shopQ" value="${(shopFilter.q||'').replace(/"/g,'&quot;')}"
+               placeholder="card, set or number" oninput="shopQTyped(this.value)"></label>
+      <label class="shop-sort">Condition
+        <select onchange="setShopFilter({cond:this.value})">${
+          [['any','Any'],['NM','NM only'],['LP','LP or better'],['MP','MP or better'],['HP','HP or better']]
+          .map(([k,l])=>`<option value="${k}"${k===shopFilter.cond?' selected':''}>${l}</option>`).join('')}</select></label>
+      <label class="shop-sort">Max $
+        <input type="number" min="0" step="1" style="width:70px" value="${shopFilter.max??''}"
+               placeholder="any" onchange="setShopFilter({max:this.value===''?null:Math.max(0,+this.value)})"></label>
+      <label class="shop-sort" title="Only rows priced under what that condition is normally worth">
+        <input type="checkbox" ${shopFilter.deals?'checked':''}
+               onchange="setShopFilter({deals:this.checked})"> deals only</label>
+      ${shopFilterOn()?`<button class="lnk" onclick="clearShopFilter()">clear filters</button>`:''}
+      <div class="shop-stores">${STORES.map(st=>{
+        const on=!shopFilter.stores||shopFilter.stores.includes(st.name);
+        return `<span class="species-chip ${on?'':'off'}" onclick="toggleShopStore(${JSON.stringify(st.name).replace(/"/g,'&quot;')})"
+          ><span class="tick">${on?'☑':'☐'}</span>${st.name}</span>`}).join('')}</div>
+      ${hidden?`<span class="shop-hid">${hidden} row${hidden===1?'':'s'} hidden by filters</span>`:''}
     </div>
     <div class="acts" style="margin-top:9px">
       <label class="shop-sort">Sort
@@ -1998,7 +2081,13 @@ function renderShopping(){
     });
     html+='</div>';
   });
+  const _act=document.activeElement, _wasQ=!!(_act&&_act.id==='shopQ');
+  const _caret=_wasQ?_act.selectionStart:0;
   document.getElementById('shoplist').innerHTML=html;
+  if(_wasQ){
+    const el=document.getElementById('shopQ');
+    if(el){ el.focus(); try{ el.setSelectionRange(_caret,_caret); }catch(e){} }
+  }
 }
 /* Deliberately a button: ~6,000 requests should never fire because a tab was clicked. */
 async function sweepShopping(btn){
