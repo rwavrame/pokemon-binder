@@ -119,6 +119,19 @@ def pokemon_collection(host):
 # collections.json itself caps at 250, so a few stores' real singles collection is
 # invisible and the name heuristic lands on "graded-pokemon" or "korean-pokemon".
 # For those, the whole catalogue is small enough to just walk.
+SET_TOKENS = {}   # set name -> distinctive tokens; filled by guide_cards()
+# Words that appear in set names but carry no identifying power in a product title.
+# "Pokemon GO" reduces to nothing here, which is the point: its only real token is
+# "pokemon", and treating that as a set signature made every title naming the word
+# look like it named a contradicting set.
+SET_STOP = {'pokemon', 'promo', 'promos', 'the', 'and', 'set', 'series', 'tcg',
+            'collection', 'deck', 'box', 'edition'}
+
+
+def set_sig(name):
+    """A set name reduced to the tokens that actually identify it."""
+    return {x for x in toks(name) if len(x) > 2 and x not in SET_STOP}
+
 FORCE_FULL = {'exorgames.com', 'hobbiesville.com', 'deckoutgaming.ca'}
 
 def feed(base, label, seen, out, page_cap=100):
@@ -222,6 +235,24 @@ def matches(card, title, sib_ann):
         break
     if not num_ok:
         return False
+    # A store that names a DIFFERENT set has told us this is not our card, whatever the
+    # number says. Dark Fox lists "Feebas (Delta Species) - 49/106 [Dragon Frontiers]" --
+    # that card is really 49/101, and their typo'd total is the Emerald Feebas's number.
+    # The number agreed, a total was stated, so the corroboration check below was skipped
+    # and an Emerald pocket got a Dragon Frontiers listing.
+    # Compatible means one name contains the other, so "Crown Zenith" still matches a
+    # "Crown Zenith Galarian Gallery" card and a bare "Promo" names no set at all.
+    # Promos are exempt: a promo listing routinely names the main set it accompanies,
+    # e.g. "Slowbro (083) [Staff] [Mega Evolution Promo]" for a card whose set is
+    # "MEP Black Star Promos". Their numbers are distinctive enough to stand alone.
+    if not (tt & {'promo', 'promos'}):
+        named = [s for s in SET_TOKENS if SET_TOKENS[s] and SET_TOKENS[s] <= tt]
+        if named:
+            mine_set = set_sig(card.get('set', ''))
+            if not any(s <= mine_set or mine_set <= s
+                       for s in (SET_TOKENS[n] for n in named)):
+                return False
+
     # A title that never states a total (Deck Out writes "Slowpoke (81)") is matched on
     # the number alone, so make the set corroborate it or 81 matches 81 from any set.
     # Lettered numbers are exempt: SM109 or GG34 identifies a card on its own, the way a
@@ -252,6 +283,16 @@ def guide_cards():
         k = src.index(f'const {key} = ') + len(f'const {key} = ')
         e = src.index(f';\nObject.assign(DATA.species, {key})', k)
         D['species'].update(json.loads(src[k:e]))
+    # Every set the guide knows, as significant tokens, for the contradiction check in
+    # matches(). Built from the guide itself so it needs no maintenance.
+    global SET_TOKENS
+    SET_TOKENS = {}
+    for s in D['species'].values():
+        for c in s['cards']:
+            nm = c.get('set', '')
+            if nm and nm not in SET_TOKENS:
+                SET_TOKENS[nm] = set_sig(nm)
+
     cards, seen = [], set()
     for s in D['species'].values():
         for c in s['cards']:
