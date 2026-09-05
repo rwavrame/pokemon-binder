@@ -179,6 +179,8 @@ body.pg4 .pocket .price,body.pg4 .pocket .num{font-size:11px;bottom:40px}
 .shop-row .dl.under{color:#3ddc97}
 .shop-row .dl.over{color:#ffb347}
 .shop-row .dl.sv{color:#7d88ad;font-weight:600}
+.shop-sort{font-size:12px;color:#8fa0c8;display:inline-flex;align-items:center;gap:6px;margin-right:4px}
+.shop-sort select{padding:5px 7px;background:#1e1e40;border:1px solid #333;color:#ddd;border-radius:6px;font-size:12px}
 .was{text-decoration:line-through;color:#66739a;font-size:10px;font-weight:400;margin-left:1px}
 .shop-row .tag-best{font-size:9px;font-weight:800;letter-spacing:.4px;color:#3ddc97;
   border:1px solid rgba(61,220,151,.4);border-radius:4px;padding:1px 4px;margin-left:5px}
@@ -281,6 +283,7 @@ body.pg4 .pocket .foot .stockline{font-size:9.5px}
   body.printing-shop .shop-row .nm a,body.printing-shop .shop-row .pr{color:#000}
   body.printing-shop .was{color:#666}
   body.printing-shop .shop-store>h3 button{display:none}
+  body.printing-shop .shop-sort{display:none}
   #checklist{display:block!important}
   /* placeholder mode wins: hide the checklist and print card-size cut sheets */
   body.printing-ph #checklist{display:none!important}
@@ -1821,12 +1824,45 @@ function shoppingRows(){
     });
   });
   const gorder={}; DATA.groups.forEach((g,i)=>gorder[g.id]=i);
-  Object.values(byStore).forEach(rows=>rows.sort((a,b)=>
-    (gorder[a.g.id]-gorder[b.g.id]) ||
-    String(a.p.c.d||'').localeCompare(String(b.p.c.d||'')) ||
-    (parseInt(a.p.c.num,10)||0)-(parseInt(b.p.c.num,10)||0)));
+  /* Default keeps the guide's own order -- tab, then release date, then number -- so the
+     list reads in the same sequence as the binder. Every other sort ignores the guide
+     and ranks across the whole store, which is the point of choosing one. */
+  const cmp=SHOP_SORTS[shopSort].f
+    || ((a,b)=>(gorder[a.g.id]-gorder[b.g.id])||_sSet(a,b));
+  Object.values(byStore).forEach(rows=>rows.sort(cmp));
   return {byStore, perKey, unchecked:unchecked.size, checked:checkedCards.size,
           scope:scope.length};
+}
+/* Row sorts for the shopping list. Each is a comparator over the {g,p,h} rows that
+   shoppingRows builds. Money is read through the same helpers the rendering uses, so a
+   store discount moves a row's position exactly as it moves its printed price.
+   Rows with no figure to sort on (no market price, no condition) fall to the bottom
+   rather than sorting as zero and pretending to be the best deal in the shop. */
+const _sNet =r=>netOf(r.h);
+const _sNm  =r=>r.p.v.p!=null?r.p.v.p*FX*CAD_PREMIUM:null;
+const _sCond=r=>condMarket(r.p.v.p,r.h.cond);
+const _sRatio=(r,base)=>{const b=base(r),n=_sNet(r);
+  return (b&&n!=null&&b>0.01)?n/b-1:Infinity};
+const _sSet=(a,b)=>String(a.p.c.d||'').localeCompare(String(b.p.c.d||''))
+                || (parseInt(a.p.c.num,10)||0)-(parseInt(b.p.c.num,10)||0);
+const _sName=(a,b)=>a.p.c.n.localeCompare(b.p.c.n)||_sSet(a,b);
+const _num=(x,y)=>(x??Infinity)-(y??Infinity);
+const SHOP_SORTS={
+  set  :{l:'Set & number',        f:null},   // null = guide order, applied below
+  name :{l:'Card name (A–Z)',     f:_sName},
+  lo   :{l:'Price: low to high',  f:(a,b)=>_num(_sNet(a),_sNet(b))||_sName(a,b)},
+  hi   :{l:'Price: high to low',  f:(a,b)=>_num(_sNet(b),_sNet(a))||_sName(a,b)},
+  deal :{l:'Best deal for the condition',
+         f:(a,b)=>_num(_sRatio(a,_sCond),_sRatio(b,_sCond))||_sName(a,b)},
+  save :{l:'Biggest saving vs NM',f:(a,b)=>_num(_sRatio(a,_sNm),_sRatio(b,_sNm))||_sName(a,b)}
+};
+let shopSort='set';
+try{const v=localStorage.getItem('shopSort_v1'); if(v&&SHOP_SORTS[v]) shopSort=v;}catch(e){}
+function setShopSort(v){
+  if(!SHOP_SORTS[v]) return;
+  shopSort=v;
+  try{localStorage.setItem('shopSort_v1',v);}catch(e){}
+  renderShopping();
 }
 function shopPlain(store,rows){
   return rows.map(r=>{
@@ -1894,6 +1930,10 @@ function renderShopping(){
       ${Object.keys(STORE_DISC).length?`<br><span style="color:#3ddc97">Your discount is applied throughout — ${STORES.filter(x=>STORE_DISC[x.id]).map(x=>`${x.name} ${Math.round(STORE_DISC[x.id]*100)}%</span><span style="color:#3ddc97">`).join(', ')}</span><span style="color:#8fa0c8"> — so prices, subtotals, the percentages and which shop counts as cheapest are all what <i>you</i> pay. Shelf prices are struck through. Edit under ⚙ Stores.</span>`:''}      ${unchecked?`<br><span class="warn">${unchecked} card${unchecked===1?'':'s'} in scope have not been stock-checked yet — this list is incomplete until they are.</span>`:''}
     </div>
     <div class="acts" style="margin-top:9px">
+      <label class="shop-sort">Sort
+        <select onchange="setShopSort(this.value)">${Object.entries(SHOP_SORTS).map(([k,v])=>
+          `<option value="${k}"${k===shopSort?' selected':''}>${v.l}</option>`).join('')}</select>
+      </label>
       <button onclick="sweepShopping(this)">${unchecked?`Check the ${unchecked} unchecked`:'Re-check everything'}</button>${stockDrift?`
       <span style="color:#a0a0b8;font-size:11px;margin-left:8px">${stockDrift} product${stockDrift===1?'':'s'} could not be read — delisted, or the shop throttled us. Re-check to retry; if it persists, re-run tools/build-handle-index.py</span>`:''}
       <button onclick="window.print()">Print list</button>
