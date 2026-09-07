@@ -32,8 +32,14 @@ def store_list():
     i = src.index('const STORES=[')
     j = src.index('];', i)
     found = re.findall(r"id:'([^']+)'\s*,\s*name:'[^']*'\s*,\s*host:'([^']+)'", src[i:j])
-    if not found:
-        sys.exit('could not parse STORES out of the HTML')
+    # Count the entries independently and insist the two agree. A name written with
+    # double quotes (an apostrophe forces it) slips straight past the pattern above,
+    # and the store is then never swept -- silently, which is the whole failure mode
+    # this function exists to prevent.
+    declared = len(re.findall(r"\{\s*id:", src[i:j]))
+    if not found or len(found) != declared:
+        sys.exit(f'parsed {len(found)} of {declared} STORES entries -- check the HTML '
+                 f'uses single-quoted name: values')
     return found
 
 
@@ -192,10 +198,16 @@ def ann_toks(n):
 def toks(s):
     return {t for t in re.split(r'[^a-z0-9]+', str(s).lower().replace('é', 'e')) if t}
 
-NUMTOK = re.compile(r'(?:^|[^A-Za-z0-9/])([A-Za-z]{0,4}\d{1,4})(?:\s*/\s*([A-Za-z]{0,4}\d{1,4}))?(?![A-Za-z0-9/])')
+# Dark Fox writes "Mareep - GG34/null" when it has no total. Without the null branch the
+# trailing guard rejects the whole token -- the slash is still there -- and GG34 becomes
+# invisible, losing every Galarian Gallery and Trainer Gallery card at that shop.
+NUMTOK = re.compile(r'(?:^|[^A-Za-z0-9/])([A-Za-z]{0,4}\d{1,4})(?:\s*/\s*([A-Za-z]{0,4}\d{1,4}|[Nn]ull|N/?A))?(?![A-Za-z0-9/])')
 
 def canon_num(x):
-    m = re.match(r'^([A-Za-z]*)0*(\d+)$', str(x or '').strip())
+    s = str(x or '').strip()
+    if s.lower() in ('null', 'na', 'n/a'):
+        return None                      # a stated non-total is the same as none stated
+    m = re.match(r'^([A-Za-z]*)0*(\d+)$', s)
     return (m.group(1).upper(), m.group(2)) if m else None
 
 def matches(card, title, sib_ann):
@@ -245,13 +257,18 @@ def matches(card, title, sib_ann):
     # Promos are exempt: a promo listing routinely names the main set it accompanies,
     # e.g. "Slowbro (083) [Staff] [Mega Evolution Promo]" for a card whose set is
     # "MEP Black Star Promos". Their numbers are distinctive enough to stand alone.
-    if not (tt & {'promo', 'promos'}):
-        named = [s for s in SET_TOKENS if SET_TOKENS[s] and SET_TOKENS[s] <= tt]
-        if named:
-            mine_set = set_sig(card.get('set', ''))
-            if not any(s <= mine_set or mine_set <= s
-                       for s in (SET_TOKENS[n] for n in named)):
-                return False
+    mine_set = set_sig(card.get('set', ''))
+    if not (tt & {'promo', 'promos'}) and not (mine_set and mine_set <= tt):
+        # The card's own set is not named, so a different one being named is a
+        # contradiction. Ignore a set that is present only because the card is called
+        # that -- "Detective Pikachu - SM170" is an SM Black Star Promo, not a card from
+        # the Detective Pikachu set, and must not reject itself on its own name.
+        name_toks = toks(card['n'])
+        named = [SET_TOKENS[s] for s in SET_TOKENS
+                 if SET_TOKENS[s] and SET_TOKENS[s] <= tt
+                 and not SET_TOKENS[s] <= name_toks]
+        if named and not any(s <= mine_set or mine_set <= s for s in named):
+            return False
 
     # A title that never states a total (Deck Out writes "Slowpoke (81)") is matched on
     # the number alone, so make the set corroborate it or 81 matches 81 from any set.
