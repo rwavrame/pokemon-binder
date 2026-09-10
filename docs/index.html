@@ -1065,10 +1065,10 @@ function stockGet(c){
 /* Snapcaster's facets are URL-addressable; its Printing values are exactly
    1st Edition / Holofoil / Normal / Reverse Holofoil / Unlimited. */
 const _SNAP_PRINT={reverse:'Reverse Holofoil','1st':'1st Edition',unlimited:'Unlimited'};
-function snapUrl(c,vkey){
+function snapUrl(c,vkey,vlabel){
   const p=new URLSearchParams({q:searchName(c.n), sortBy:'price-asc'});
   if(c.num && c.tot) p.set('collector_number', c.num+'/'+c.tot);
-  const pr=_SNAP_PRINT[wantPrinting(vkey)];
+  const pr=_SNAP_PRINT[wantPrinting(vkey,vlabel,(c.v||[]).length)];
   if(pr) p.set('printing',pr);
   return 'https://www.snapcaster.ca/singles/pokemon?'+p.toString();
 }
@@ -1162,6 +1162,10 @@ function printingOf(productTitle,variantTitle,handle){
   if(named.includes('crosshatch')) return 'crosshatch';
   if(named.includes('toys r us')||named.includes('toys \"r\" us')) return 'toysrus';
   if(named.includes('20th anniversary')) return 'anniv20';
+  /* Same table the pockets are read through, so a title and a label cannot disagree
+     about what a printing is. Still ahead of the generic reverse below: a
+     Build-A-Bear or McDonald's card can itself be a reverse holo. */
+  for(const tr of TREATMENTS){ if(tr.title.test(named)) return _treatCode(tr,named); }
   /* only now the generic reverse */
   if(v.includes('reverse holo')) return 'reverse';
   if(t.includes('reverse holo')) return 'reverse';
@@ -1201,7 +1205,39 @@ const _WANT={reverseHolofoil:'reverse','1stEdition':'1st','1stEditionHolofoil':'
    class of bug as a reverse holo reporting the normal print. Defaulting to the key
    itself means an unrecognised treatment reads "no listing", which is honest. */
 const _BASE_KEYS=new Set(['normal','holofoil','art','cameo','custom','nonholo']);
-function wantPrinting(vkey){
+/* A pocket says what printing it is in its LABEL; a shop says it in the product
+   TITLE. Both are read from this one table, so the two can never drift apart --
+   every bug of this kind so far has been two lists that had to agree and quietly
+   did not. `suffix` splits a family that would otherwise collapse: a 2023 Holiday
+   Calendar must not be filled by a 2025 one. */
+const TREATMENTS=[
+  {code:'bab',       label:/build-a-bear/i,      title:/build[- ]?a[- ]?bear/i},
+  {code:'mcd',       label:/mcdonald/i,          title:/mcdonald/i},
+  {code:'deckexcl',  label:/deck exclusive|theme deck|b&b deck|b&b promo/i,
+                     title:/deck exclusive|theme deck|trainer kit|build\s*(?:&|and)\s*battle/i},
+  {code:'movie',     label:/movie stamp/i,       title:/movie (?:promo|stamp)/i},
+  {code:'pokecenter',label:/pok[e\u00e9]mon center/i, title:/pok[e\u00e9]?mon center/i},
+  {code:'asiachamp', label:/asia championship/i, title:/asia champ/i},
+  {code:'sheen',     label:/sheen/i,             title:/sheen holo/i},
+  {code:'etbpromo',  label:/etb promo/i,         title:/elite trainer box/i},
+  {code:'calendar',  label:/calendar/i,          title:/(?:holiday|countdown|surprise) calendar/i,
+                     suffix:x=>(String(x).match(/(20\d\d)/)||['',''])[1]},
+  {code:'anniv',     label:/\d+(?:st|nd|rd|th) anniversary/i,
+                     title:/\d+(?:st|nd|rd|th) anniversary/i,
+                     suffix:x=>(String(x).match(/(\d+)(?:st|nd|rd|th)\s*anniversary/i)||['',''])[1]},
+];
+function _treatCode(t,src){ return t.code+(t.suffix?t.suffix(src):'') }
+function wantPrinting(vkey,vlabel,nprints){
+  /* The label decides first. The data reuses base keys -- `nonholo` alone carries
+     Build-A-Bear, theme-deck, B&B-deck and deck-exclusive pockets -- so keying off
+     vkey alone made every one of them ask for the plain card and take its stock.
+     Unless it is the card's ONLY printing: a Pikachu whose set is "McDonald's
+     Collection 2014" has no non-McDonald's version, so the shop's plain listing is
+     that card and demanding the word back would just make it unfindable. */
+  if(vlabel){
+    const t=TREATMENTS.find(x=>x.label.test(vlabel));
+    if(t) return nprints===1 ? 'base' : _treatCode(t,vlabel);
+  }
   if(_WANT[vkey]) return _WANT[vkey];
   return _BASE_KEYS.has(vkey) ? 'base' : vkey;
 }
@@ -1209,7 +1245,10 @@ const _PRINT_LABEL={reverse:'RH','1st':'1st Ed',unlimited:'Unlimited',pokeball:'
   masterball:'Master Ball',cosmos:'Cosmos',shadowless:'Shadowless',base:'',
   anniv20:'20th Anniv',toysrus:'Toys R Us',play:'Play!',nostar:'No Star',
   staff:'STAFF',prestamp:'Prerelease',worlds:'Worlds',crosshatch:'Crosshatch',
-  friendball:'Friend Ball',energysym:'Energy Symbol',playvl:'Play! (vertical line)'};
+  friendball:'Friend Ball',energysym:'Energy Symbol',playvl:'Play! (vertical line)',
+  bab:'Build-A-Bear',mcd:"McDonald's",deckexcl:'Deck exclusive',
+  movie:'Movie stamp',pokecenter:'Pokémon Center',
+  asiachamp:'Asia Champs',sheen:'Sheen Holo',etbpromo:'ETB promo',calendar:'Calendar'};
 
 /* ?country=CA is not optional: four of the nine shops run Shopify Markets regional
    pricing and will quote US dollars to a request they geolocate as American. */
@@ -1403,12 +1442,12 @@ function rankOffers(list){
 }
 function stockLineHtml(p){
   if(statusOf(p.key)==='owned') return '';
-  const snap=`<a href="${snapUrl(p.c,p.v.k)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">🔎 Snapcaster</a>`;
+  const snap=`<a href="${snapUrl(p.c,p.v.k,p.v.l)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">🔎 Snapcaster</a>`;
   if(p.custom) return `<span class="stockline">${snap}</span>`;
   const e=stockGet(p.c);
   if(!e) return `<span class="stockline">${snap}</span>`;
 
-  const want=wantPrinting(p.v.k);
+  const want=wantPrinting(p.v.k,p.v.l,(p.c.v||[]).length);
   const tag=(want in _PRINT_LABEL)?_PRINT_LABEL[want]:(p.v.l||'');
   const lab=tag?tag+' ':'';
   const mine=e.hits.filter(h=>h.printing===want);
@@ -1478,13 +1517,13 @@ function multiSearch(){
 function stockDetailHtml(p){
   if(p.custom) return '';
   const e=stockGet(p.c);
-  const snap=`<a href="${snapUrl(p.c,p.v.k)}" target="_blank" rel="noopener"><button>🔎 Snapcaster (80+ stores)</button></a>`;
+  const snap=`<a href="${snapUrl(p.c,p.v.k,p.v.l)}" target="_blank" rel="noopener"><button>🔎 Snapcaster (80+ stores)</button></a>`;
   if(!e) return `<div class="stock-list"><h4>Canadian stock</h4>
     <div style="color:#8fa0c8;font-size:12px">Not checked yet — use <b>Check stock</b> on the binder page, or search all Canadian stores:</div>
     <div class="acts" style="margin-top:8px">${snap}</div></div>`;
   /* grouped by printing, the pocket's own printing first — this is where the
      1st Edition / Shadowless / Unlimited ambiguity becomes visible instead of guessed */
-  const want=wantPrinting(p.v.k);
+  const want=wantPrinting(p.v.k,p.v.l,(p.c.v||[]).length);
   const groups=[...new Set(e.hits.map(h=>h.printing))]
     .sort((a,b)=>(b===want)-(a===want)||a.localeCompare(b));
   const rows=groups.map(g=>{
@@ -1821,7 +1860,7 @@ function shoppingRows(){
     const e=stockGet(p.c);
     if(!e){ unchecked.add(stockId(p.c)); return; }
     checkedCards.add(stockId(p.c));
-    const want=wantPrinting(p.v.k);
+    const want=wantPrinting(p.v.k,p.v.l,(p.c.v||[]).length);
     const live=e.hits.filter(h=>h.printing===want && h.available);
     if(!live.length) return;
     // cheapest qualifying offer at each store that has it
