@@ -1274,8 +1274,27 @@ function _treatCode(t,src){ return t.code+(t.suffix?t.suffix(src):'') }
    with BOTH a plain and a holo pocket needs the two told apart -- POP Series 7 Ampharos
    has an N and an H pocket, and both were filling from both listings. */
 function splitsHolo(card){
-  const ks=new Set(((card&&card.v)||[]).map(v=>v.k));
-  return (ks.has('normal')||ks.has('nonholo')) && ks.has('holofoil');
+  const vs=(card&&card.v)||[];
+  if(!vs.some(v=>v.k==='holofoil')) return false;
+  /* Ask what the other pockets actually WANT, not what key they carry. Azumarill
+     Team Rocket Returns 1/109 has nonholo + holofoil + reverse, but its nonholo
+     pocket is the THEME DECK print and wants deckexcl -- so nothing on that card
+     wants the plain print, and demanding the word "holo" back made five shops'
+     bare listings match nothing at all. */
+  /* The holo pocket itself resolves to 'base', so it must not be its own evidence of
+     a split -- counting it made every holo-only card look split and demand the word
+     "holo" back from titles that never say it. */
+  return vs.some(v=>v.k!=='holofoil' && _wantNoHolo(v.k,v.l,vs.length)==='base');
+}
+/* wantPrinting without the holofoil branch, so splitsHolo can consult it without the
+   two calling each other forever. */
+function _wantNoHolo(vkey,vlabel,nprints){
+  if(vlabel){
+    const t=TREATMENTS.find(x=>x.label.test(vlabel));
+    if(t) return nprints===1 ? 'base' : _treatCode(t,vlabel);
+  }
+  if(_WANT[vkey]) return _WANT[vkey];
+  return _BASE_KEYS.has(vkey) ? 'base' : vkey;
 }
 function offerPrint(h,card){
   return (h.printing==='holo' && !splitsHolo(card)) ? 'base' : h.printing;
