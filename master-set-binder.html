@@ -117,14 +117,18 @@ body.pg4 .pocket .price,body.pg4 .pocket .num{font-size:11px;bottom:40px}
 
 /* checklist */
 #checklist{display:none}
-#checklist table{width:100%;border-collapse:collapse;font-size:12px;background:#14142c;border-radius:8px;overflow:hidden}
-#checklist th{background:#1c1c40;padding:7px 8px;text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;color:#8fa0c8;position:sticky;top:52px}
+#checklist table{width:100%;border-collapse:separate;border-spacing:0;font-size:12px;background:#14142c;border-radius:8px}
+#checklist thead th:first-child{border-top-left-radius:8px}
+#checklist thead th:last-child{border-top-right-radius:8px}
+#checklist tbody tr:last-child td:first-child{border-bottom-left-radius:8px}
+#checklist tbody tr:last-child td:last-child{border-bottom-right-radius:8px}
+#checklist th{background:#1c1c40;padding:7px 8px;text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;color:#8fa0c8;position:sticky;top:var(--stickytop,36px);z-index:2;box-shadow:inset 0 -1px 0 #2b2b5c}
 #checklist th.sortable{cursor:pointer;user-select:none}
 #checklist th.sortable:hover{color:#dfe6ff;background:#23234d}
 #checklist th.sortable.on{color:#7ea6ff}
-#checklist td{padding:5px 8px;border-top:1px solid #232348}
-#checklist tr.o td{background:rgba(61,220,151,.09)}
-#checklist tr.r td{background:rgba(255,179,71,.09)}
+#checklist td{padding:5px 8px;border-top:1px solid #232348;background:#14142c}
+#checklist tr.o td{background:#172c28}
+#checklist tr.r td{background:#2b2618}
 #checklist .box{display:inline-block;width:13px;height:13px;border:1.5px solid #667;border-radius:3px;text-align:center;line-height:11px;font-size:10px;cursor:pointer}
 #checklist h2{font-size:14px;margin:18px 0 8px;color:#cfd8ff;border-bottom:1px solid #333;padding-bottom:5px}
 .notes{background:#14142c;border:1px solid #262650;border-radius:10px;padding:14px 16px;font-size:12.5px;line-height:1.65;color:#b8c0dd;margin-bottom:16px}
@@ -2648,6 +2652,15 @@ function printPlaceholders(){
   setTimeout(()=>document.body.classList.remove('printing-ph'),500);
 }
 
+/* The checklist's column labels stick under the site header. Its height is not a
+   constant -- it wraps on a narrow window -- so measure it rather than hard-code an
+   offset, which is how they ended up floating 16px too low with rows sliding through
+   the gap. */
+function syncStickyTop(){
+  const h=document.querySelector('header');
+  if(h) document.documentElement.style.setProperty('--stickytop',Math.round(h.getBoundingClientRect().height)+'px');
+}
+addEventListener('resize',syncStickyTop);
 function setView(v){
   view=v;
   document.getElementById('viewBinder').classList.toggle('on',v==='binder');
@@ -2663,6 +2676,7 @@ function setView(v){
   document.body.classList.toggle('printing-shop',v==='shop');
   if(v==='ph') renderPlaceholders();
   if(v==='shop') renderShopping();
+  syncStickyTop();
 }
 document.getElementById('cameoMode').onchange=e=>setCameoMode(e.target.value);
 document.getElementById('pageSize').onchange=e=>setPageSize(+e.target.value);
