@@ -1309,6 +1309,14 @@ function offerPrint(h,card){
     const t=TREATMENTS.find(x=>x.label.test(vs[0].l||''));
     if(t && pr===_treatCode(t,vs[0].l||'')) pr='base';
   }
+  /* A treatment word inside the card's own SET is naming the set, not a printing.
+     Marill's set IS "McDonald's Collection 2015", so every shop writes "McDonald's"
+     in the title and eight of its nine listings read as a McDonald's *treatment*
+     against a pocket asking for the plain card. Same for the Trainer Kit sets. */
+  if(pr!=='base' && card && card.set){
+    const t=TREATMENTS.find(x=>x.title.test(card.set));
+    if(t && pr===_treatCode(t,card.set)) pr='base';
+  }
   return pr;
 }
 function wantPrinting(vkey,vlabel,nprints,card){
