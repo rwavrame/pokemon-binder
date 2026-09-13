@@ -1297,7 +1297,19 @@ function _wantNoHolo(vkey,vlabel,nprints){
   return _BASE_KEYS.has(vkey) ? 'base' : vkey;
 }
 function offerPrint(h,card){
-  return (h.printing==='holo' && !splitsHolo(card)) ? 'base' : h.printing;
+  let pr=h.printing;
+  if(pr==='holo' && !splitsHolo(card)) pr='base';
+  /* A sole printing asks for 'base' -- there is nothing to distinguish it FROM -- but a
+     shop may still name the treatment in the title. Mareep, HS Trainer Kit 13/30, is
+     only ever the deck-exclusive card, and Dark Fox calls it "HGSS Trainer Kit": that
+     read as deckexcl against a pocket asking for base, so an in-stock copy was
+     invisible. Collapse a listing that names THIS pocket's own treatment. */
+  const vs=(card&&card.v)||[];
+  if(vs.length===1 && pr!=='base'){
+    const t=TREATMENTS.find(x=>x.label.test(vs[0].l||''));
+    if(t && pr===_treatCode(t,vs[0].l||'')) pr='base';
+  }
+  return pr;
 }
 function wantPrinting(vkey,vlabel,nprints,card){
   /* The label decides first. The data reuses base keys -- `nonholo` alone carries
@@ -1602,7 +1614,11 @@ function stockDetailHtml(p){
   const rows=groups.map(g=>{
     const list=rankOffers(e.hits.filter(h=>offerPrint(h,p.c)===g))
       .sort((a,b)=>(b.available-a.available)||(netOf(a)??1e9)-(netOf(b)??1e9));
-    const head=`<div class="stock-grp${g===want?' want':''}">${(g in _PRINT_LABEL)?(_PRINT_LABEL[g]||'Normal'):g}${g===want?' — this pocket':''}</div>`;
+    /* Name the matching group after the POCKET, not after the printing code it
+       resolved to -- a Deck exclusive pocket that asks for 'base' was reading
+       "Normal — this pocket", which flatly contradicts the pocket's own label. */
+    const nm=g===want ? (p.v.l||'Normal') : ((g in _PRINT_LABEL)?(_PRINT_LABEL[g]||'Normal'):g);
+    const head=`<div class="stock-grp${g===want?' want':''}">${nm}${g===want?' — this pocket':''}</div>`;
     return head+list.map(h=>`<div class="stock-row ${h.available?'in':'out'}">
       <span class="who">${h.store}</span>
       <span class="what"><a href="${h.url}" target="_blank" rel="noopener" style="color:#8ab4ff;text-decoration:none">${h.title}</a>${h.variant?` <i style="color:#67759c">· ${h.variant}</i>`:''}${h.approx?' <i style="color:#a0a0b8">(product level)</i>':''}</span>
