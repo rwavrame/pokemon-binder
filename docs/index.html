@@ -2251,7 +2251,9 @@ function renderShopping(){
         <select onchange="setShopSort(this.value)">${Object.entries(SHOP_SORTS).map(([k,v])=>
           `<option value="${k}"${k===shopSort?' selected':''}>${v.l}</option>`).join('')}</select>
       </label>
-      <button onclick="sweepShopping(this)">${unchecked?`Check the ${unchecked} unchecked`:'Re-check everything'}</button>${stockDrift?`
+      <button onclick="sweepShopping(this,event.shiftKey)"
+              title="${unchecked?`Looks up the ${unchecked} card${unchecked===1?'':'s'} not yet read. Shift-click to re-read all ${checked+unchecked} instead.`:`Re-reads all ${checked} cards still missing from the visible tabs.`}"
+        >${unchecked?`Check the ${unchecked} unchecked`:'Re-check everything'}</button>${stockDrift?`
       <span style="color:#a0a0b8;font-size:11px;margin-left:8px">${stockDrift} product${stockDrift===1?'':'s'} could not be read — delisted, or the shop throttled us. Re-check to retry; if it persists, re-run tools/build-handle-index.py</span>`:''}
       <button onclick="window.print()">Print list</button>
     </div></div>`;
@@ -2330,9 +2332,14 @@ function renderShopping(){
   }
 }
 /* Deliberately a button: ~6,000 requests should never fire because a tab was clicked. */
-async function sweepShopping(btn){
-  const cards=[...new Map(shopScope().filter(x=>!x.p.custom)
+async function sweepShopping(btn,force){
+  /* The button offered to "check the N unchecked" and then swept everything anyway.
+     A card already read inside the 24h TTL is worth ~21 requests to ask again, so
+     skip it unless there is nothing new left — or unless shift-click forces it. */
+  const inScope=[...new Map(shopScope().filter(x=>!x.p.custom)
       .map(x=>[stockId(x.p.c),x.p.c])).values()];
+  const fresh=inScope.filter(c=>!stockGet(c));
+  const cards=(force||!fresh.length)?inScope:fresh;
   if(!cards.length){ toast('Nothing in scope.'); return; }
   abortStock();
   const ac=new AbortController(); stockRun=ac;
@@ -2351,7 +2358,7 @@ async function sweepShopping(btn){
   accs.forEach((v,k)=>{ stockCache[k]=v; });
   stockRun=null; stockSave(); btn.disabled=false;
   renderShopping();
-  toast(`Checked ${cards.length} cards.`);
+  toast(`Checked ${cards.length} card${cards.length===1?'':'s'}${cards.length<inScope.length?` — skipped ${inScope.length-cards.length} already checked in the last 24h`:''}.`);
 }
 
 /* stats */
