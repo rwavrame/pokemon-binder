@@ -589,9 +589,18 @@ function save(skipSync){
     localStorage.setItem(CUSTOM,JSON.stringify(custom));
     setSaveState('💾 saved');
   }catch(e){
-    lsOk=false;
-    setSaveState('⚠️ browser storage blocked');
-    if(!fileHandle) warnStorage();
+    /* The stock cache is disposable; these checkoffs are not. If the quota is gone,
+       take the cache out of the way and try again before ever reporting a failure. */
+    try{
+      localStorage.removeItem(STOCK_KEY); stockPersistOff=true; stockWarn();
+      localStorage.setItem(STORAGE,JSON.stringify(state));
+      localStorage.setItem(CUSTOM,JSON.stringify(custom));
+      setSaveState('💾 saved');
+    }catch(e2){
+      lsOk=false;
+      setSaveState('⚠️ browser storage blocked');
+      if(!fileHandle) warnStorage();
+    }
   }
   if(!skipSync) syncAfterChange();
   if(fileHandle){
@@ -1088,8 +1097,109 @@ const STOCK_KEY='binderStock_v3';   // v2 came through the proxy; shape and sour
 const STOCK_TTL=24*60*60*1000;      // a day; store inventory moves, cached answers go stale
 const STOCK_MAX_INFLIGHT=8;   // nine hosts now; still modest per host
 let stockCache={};
-try{ stockCache=JSON.parse(localStorage.getItem(STOCK_KEY)||'{}'); }catch(e){ stockCache={}; }
-function stockSave(){ try{ localStorage.setItem(STOCK_KEY,JSON.stringify(stockCache)); }catch(e){} }
+/* This cache outgrew localStorage: ~24KB per card across ~1,250 cards in a full sweep,
+   and nothing ever evicted it, so it grew until the quota died and took the one thing
+   that cannot be re-fetched — the owned/ordered marks — down with it. IndexedDB has
+   room to spare. The cache stays a plain in-memory object so every synchronous reader
+   (stockGet, stockLineHtml, stockDetailHtml, shoppingRows) is untouched; only the
+   persistence ends moved. */
+const STOCK_LS_CAP=3*1024*1024;      // fallback only: never crowd out progress again
+let stockDB=null, stockPersistOff=false, stockWarned=false, stockTimer=null;
+const _persistedAt=new Map();        // key -> the .t we last wrote, so we only write changes
+function stockFresh(e){ return e && typeof e.t==='number' && Date.now()-e.t < STOCK_TTL }
+function stockWarn(){
+  if(stockWarned) return; stockWarned=true;
+  toast("Stock results are too big to keep in this browser — they are correct for this session but will not survive a reload. Your collection progress is safe.");
+}
+function idbOpen(){
+  return new Promise((res,rej)=>{
+    if(typeof indexedDB==='undefined') return rej(new Error('no indexeddb'));
+    let r; try{ r=indexedDB.open('binderStock',1); }catch(e){ return rej(e); }
+    r.onupgradeneeded=()=>{ if(!r.result.objectStoreNames.contains('cards')) r.result.createObjectStore('cards'); };
+    r.onsuccess=()=>res(r.result);
+    r.onerror=()=>rej(r.error);
+    r.onblocked=()=>rej(new Error('blocked'));
+  });
+}
+async function stockBoot(){
+  try{ stockDB=await idbOpen(); }catch(e){ stockDB=null; }
+  if(stockDB){
+    const recs=await new Promise(res=>{
+      const out=[];
+      try{
+        const q=stockDB.transaction('cards','readonly').objectStore('cards').openCursor();
+        q.onsuccess=ev=>{ const c=ev.target.result; if(!c) return res(out); out.push([c.key,c.value]); c.continue(); };
+        q.onerror=()=>res(out);
+      }catch(e){ res(out); }
+    });
+    const dead=[];
+    /* A sweep may already be writing into stockCache while this load is awaiting IDB.
+       Never let a stored record overwrite a fresher one held in memory. */
+    recs.forEach(([k,v])=>{
+      if(!stockFresh(v)){ dead.push(k); return; }
+      if(!stockCache[k] || stockCache[k].t < v.t){ stockCache[k]=v; _persistedAt.set(k,v.t); }
+    });
+    /* Fold anything left in localStorage into IDB and hand the quota back. This is what
+       clears an already-blocked browser on the very first load after the fix. */
+    let moved=0;
+    try{
+      const old=localStorage.getItem(STOCK_KEY);
+      if(old){
+        Object.entries(JSON.parse(old)||{}).forEach(([k,v])=>{
+          if(stockFresh(v) && !stockCache[k]){ stockCache[k]=v; moved++; }
+        });
+        localStorage.removeItem(STOCK_KEY);
+      }
+    }catch(e){ try{ localStorage.removeItem(STOCK_KEY); }catch(e2){} }
+    try{
+      const tx=stockDB.transaction('cards','readwrite'), os=tx.objectStore('cards');
+      dead.forEach(k=>{ try{ os.delete(k); }catch(e){} });
+      if(moved) Object.entries(stockCache).forEach(([k,v])=>{
+        if(_persistedAt.get(k)!==v.t){ try{ os.put(v,k); _persistedAt.set(k,v.t); }catch(e){} }
+      });
+    }catch(e){}
+  }else{
+    try{ Object.entries(JSON.parse(localStorage.getItem(STOCK_KEY)||'{}'))
+           .forEach(([k,v])=>{ if(stockFresh(v)) stockCache[k]=v; }); }catch(e){}
+  }
+  paintStock(); if(view==='shop') renderShopping();
+}
+function stockSave(){
+  if(stockDB){
+    clearTimeout(stockTimer);
+    stockTimer=setTimeout(()=>{
+      try{
+        const tx=stockDB.transaction('cards','readwrite'), os=tx.objectStore('cards');
+        Object.entries(stockCache).forEach(([k,v])=>{
+          if(_persistedAt.get(k)!==v.t){ os.put(v,k); _persistedAt.set(k,v.t); }
+        });
+        tx.onerror=()=>stockWarn();
+      }catch(e){ stockWarn(); }
+    },400);
+    return;
+  }
+  stockSaveLS();
+}
+/* No IndexedDB (private mode, or it refused to open). Keep persisting, but pruned to
+   what is still readable and capped, so the fallback cannot recreate the failure. */
+function stockSaveLS(){
+  if(stockPersistOff) return;
+  let ents=Object.entries(stockCache).filter(([,v])=>stockFresh(v))
+                 .sort((a,b)=>b[1].t-a[1].t);          // newest kept, oldest evicted
+  for(;;){
+    let str;
+    try{ str=JSON.stringify(Object.fromEntries(ents)); }catch(e){ return; }
+    if(str.length>STOCK_LS_CAP && ents.length>1){
+      ents=ents.slice(0,Math.max(1,Math.floor(ents.length*0.8))); continue;
+    }
+    try{ localStorage.setItem(STOCK_KEY,str); return; }
+    catch(e){
+      if(ents.length>1){ ents=ents.slice(0,Math.max(1,Math.floor(ents.length*0.7))); continue; }
+      try{ localStorage.removeItem(STOCK_KEY); }catch(e2){}
+      stockPersistOff=true; stockWarn(); return;
+    }
+  }
+}
 /* keyed by the REAL card id, so all variants of a card — and the same card in an
    artist tab — share one lookup. Deliberately separate from `state`: this is
    ephemeral per-device data and must never bloat the Gist sync payload. */
@@ -2773,6 +2883,7 @@ loadSync();
 syncStatus(syncConfigured()?'sync ready':'not configured');
 if(syncConfigured()) gistPull(true);
 setSaveState('💾 auto-saving');
+stockBoot();
 </script>
 </body>
 </html>
