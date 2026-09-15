@@ -360,6 +360,9 @@ body.pg4 .pocket .foot .stockline{font-size:9.5px}
       <input type="number" id="fxRate" step="0.001" min="0.01" value="1.374"
              title="USD→CAD rate used for every price shown"
              style="width:66px;padding:4px 6px;background:#1e1e40;border:1px solid #333;color:#ddd;border-radius:6px;font-size:12px">
+      <button id="priceBtn" onclick="refreshPrices(this,false,event.shiftKey)"
+              title="Re-pull TCGplayer market prices for anything stale. Runs on its own when they are over a week old. Shift-click re-reads every card."
+              style="margin-left:6px;padding:4px 8px;font-size:11px">Refresh prices</button>
     </span>
     <select id="cameoMode" title="Where the cameo cards sit in the binder">
       <option value="end">Cameos at end of tab</option>
@@ -405,7 +408,7 @@ body.pg4 .pocket .foot .stockline{font-size:9.5px}
   Card data &amp; images from the <a href="https://pokemontcg.io" target="_blank">Pokémon TCG API</a> (English-language sets only) ·
   sprites from <a href="https://pokeapi.co" target="_blank">PokeAPI</a> · prices are TCGplayer USD market values captured on the build date below, shown converted to CAD.
   Progress saves automatically in this browser; use <b>Link save file</b> or <b>Export JSON</b> to keep an off-browser copy.
-  <br>Built 2026-08-20 · 1013 pockets across <span id="footPages">127</span> binder pages at the current page size.
+  <br>Built 2026-08-20 · <span id="priceAsOf">prices as built</span> · 1013 pockets across <span id="footPages">127</span> binder pages at the current page size.
 </footer>
 
 <div class="modal" id="cardModal"><div class="box" id="cardBox"></div></div>
@@ -1114,8 +1117,12 @@ function stockWarn(){
 function idbOpen(){
   return new Promise((res,rej)=>{
     if(typeof indexedDB==='undefined') return rej(new Error('no indexeddb'));
-    let r; try{ r=indexedDB.open('binderStock',1); }catch(e){ return rej(e); }
-    r.onupgradeneeded=()=>{ if(!r.result.objectStoreNames.contains('cards')) r.result.createObjectStore('cards'); };
+    let r; try{ r=indexedDB.open('binderStock',2); }catch(e){ return rej(e); }
+    r.onupgradeneeded=()=>{
+      const db=r.result;
+      if(!db.objectStoreNames.contains('cards'))  db.createObjectStore('cards');
+      if(!db.objectStoreNames.contains('prices')) db.createObjectStore('prices');
+    };
     r.onsuccess=()=>res(r.result);
     r.onerror=()=>rej(r.error);
     r.onblocked=()=>rej(new Error('blocked'));
@@ -1199,6 +1206,184 @@ function stockSaveLS(){
       stockPersistOff=true; stockWarn(); return;
     }
   }
+}
+/* ---------------- TCGplayer market prices, refreshed in the background ----------------
+   Every price in DATA is a USD market value frozen at build time. Measured against the
+   live API, 87% of them had moved and one card was up 165%, which makes cost-to-finish
+   and the shopping list's "saving vs NM" columns wrong. So we re-pull and overlay.
+
+   The overlay is written into the DATA variant objects themselves, which is the one
+   chokepoint every reader already goes through — pocket price, detail panel, checklist
+   column, totals, shopping list, CSV and print all update with no further change. */
+const PRICE_TTL=7*24*60*60*1000;      // a week; TCGplayer itself only moves daily
+/* Measured, not guessed: the API answers ~30% of calls with an empty HTTP 500 no matter
+   how gently it is paced (2 of 6 failed at 1.5s spacing after a cooldown), and batch size
+   is not the trigger — 50 ids succeeded where 20 failed. So retry hard, and keep batches
+   big to cut the call count: 50 ids means 41 calls instead of 101. */
+const PRICE_BATCH=50;
+const PRICE_PACE=400;
+const PRICE_MAX_CALLS=70;             // 41 for a pass, the rest for retrying what dropped
+const PRICE_API='https://api.pokemontcg.io/v2/cards';
+/* The only price keys TCGplayer publishes. Anything else in the guide — cosmos, staff,
+   deck exclusives, ball patterns — has no upstream counterpart and must keep its baked
+   figure rather than be blanked. */
+const TCG_KEYS=['normal','holofoil','reverseHolofoil','1stEditionHolofoil','unlimitedHolofoil','1stEdition','unlimited'];
+let priceCache={}, priceRun=null, priceBusy=false;
+function priceFresh(e){ return e && typeof e.t==='number' && Date.now()-e.t < PRICE_TTL }
+function priceAsOf(){
+  let best=null;
+  Object.values(priceCache).forEach(e=>{ if(e&&e.u&&(!best||e.u>best)) best=e.u; });
+  return best;
+}
+/* An `art` pocket on an artist tab stands for the whole card, and its baked figure
+   tracks the CHEAPEST printing (Corsola neo2-37: baked 9.98, unlimited 9.41, 1st Ed
+   27.51). Keep that meaning — it is the cheapest way to own the card. */
+function priceForVariant(vk,prices){
+  if(!prices) return null;
+  if(vk==='art'){
+    const vals=TCG_KEYS.map(k=>prices[k]).filter(v=>typeof v==='number');
+    return vals.length?Math.min(...vals):null;
+  }
+  return typeof prices[vk]==='number' ? prices[vk] : null;
+}
+/* Idempotent: _p0 keeps the build-time figure so re-applying never compounds, and the
+   baked baseline stays recoverable. A card the API cannot price keeps what it had. */
+function applyPrices(){
+  let changed=0;
+  Object.values(DATA.species).forEach(sp=>(sp.cards||[]).forEach(c=>{
+    const e=priceCache[c.srcId||c.id];
+    (c.v||[]).forEach(v=>{
+      if(!('_p0' in v)) v._p0=v.p;
+      const np=e?priceForVariant(v.k,e.p):null;
+      const want=(np==null)?v._p0:np;
+      if(v.p!==want){ v.p=want; changed++; }
+    });
+  }));
+  return changed;
+}
+/* Some ids in the guide are invented for cards the API has never carried, and one shape
+   of them actively breaks the query: "pc-mcdonald-s-collection-2024-002/015" contains a
+   slash, and a batch of TWO containing it returns zero rows — it had been silently
+   costing every card batched alongside it. Only ask about ids that can survive the query. */
+const PRICE_ID_OK=/^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+function priceCardIds(){
+  const ids=new Set();
+  Object.values(DATA.species).forEach(sp=>(sp.cards||[]).forEach(c=>{
+    const id=c.srcId||c.id;
+    if(id && !/^custom/.test(id) && PRICE_ID_OK.test(id)) ids.add(id);
+  }));
+  return [...ids];
+}
+/* Stalest first. With a per-call cap, a run that cannot finish still makes progress, and
+   the next one picks up where it left off rather than re-fetching the same head. */
+function priceStaleFirst(){
+  return priceCardIds().sort((a,b)=>
+    ((priceCache[a]&&priceCache[a].t)||0)-((priceCache[b]&&priceCache[b].t)||0));
+}
+function abortPrices(){ if(priceRun){ priceRun.abort(); priceRun=null; } priceBusy=false; }
+async function refreshPrices(btn,quiet,force){
+  if(priceBusy) return;
+  priceBusy=true;
+  const ac=new AbortController(); priceRun=ac;
+  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+  const label=t=>{ if(btn) btn.textContent=t; };
+  if(btn){ btn.disabled=true; btn.textContent=quiet?'Refreshing prices…':'Prices…'; }
+  /* Same convention as the stock sweep: spend the budget on what is actually stale, so
+     stragglers converge instead of being crowded out by cards fetched minutes ago.
+     Nothing stale left (or shift-click) means re-read everything. */
+  const all=priceStaleFirst();
+  const stale=all.filter(id=>!priceFresh(priceCache[id]));
+  const wanted=((force||!stale.length)?all:stale).slice(0,45*PRICE_BATCH);
+  /* A queue of GROUPS, not a flat list: a rejected batch is split and both halves are
+     re-queued, so one hostile id costs only itself. Splitting a flat list would just
+     rebuild the same batch and spin forever. */
+  const queue=[];
+  for(let i=0;i<wanted.length;i+=PRICE_BATCH) queue.push(wanted.slice(i,i+PRICE_BATCH));
+  let got=0, missed=0, calls=0, splits=0, doneIds=0;
+  const totalIds=wanted.length;
+  while(queue.length && calls<PRICE_MAX_CALLS && !ac.signal.aborted){
+    const grp=queue.shift();
+    calls++;
+    const url=PRICE_API+'?q='+encodeURIComponent(grp.map(x=>'id:'+x).join(' OR '))
+              +'&select=id,tcgplayer&pageSize=250';
+    let ok=false;
+    /* The API answers ~30-60% of calls with an empty HTTP 500 regardless of pacing, so
+       retry hard before declaring a batch lost. */
+    for(let a=0;a<6 && !ok && !ac.signal.aborted;a++){
+      try{
+        const r=await fetch(url,{signal:ac.signal});
+        if(!r.ok) throw new Error('http '+r.status);
+        const j=await r.json();
+        const rows=j.data||[];
+        rows.forEach(d=>{
+          const t=d.tcgplayer;
+          if(!t||!t.prices) return;
+          const pr={};
+          TCG_KEYS.forEach(k=>{ const m=t.prices[k]&&t.prices[k].market; if(typeof m==='number') pr[k]=m; });
+          if(Object.keys(pr).length){ priceCache[d.id]={t:Date.now(),p:pr,u:t.updatedAt||''}; got++; }
+        });
+        /* Zero rows for a multi-id batch means the query was rejected, not that the cards
+           are unpriced. Split and re-queue both halves. */
+        if(!rows.length && grp.length>1){
+          const mid=Math.ceil(grp.length/2);
+          queue.push(grp.slice(0,mid), grp.slice(mid));
+          splits++;
+        }
+        ok=true;
+      }catch(e){
+        if(ac.signal.aborted) break;
+        await sleep(600*(a+1));
+      }
+    }
+    /* A batch that never answered goes back once, halved, rather than being written off. */
+    if(!ok){
+      if(grp.length>1){ const mid=Math.ceil(grp.length/2); queue.push(grp.slice(0,mid),grp.slice(mid)); }
+      else missed+=grp.length;
+    }
+    doneIds+=grp.length;
+    if(!quiet) label(`Prices ${Math.min(doneIds,totalIds)}/${totalIds}…`);
+    if(!ac.signal.aborted) await sleep(PRICE_PACE);
+  }
+  if(ac.signal.aborted){ if(btn){ btn.disabled=false; btn.textContent='Refresh prices'; } priceBusy=false; return; }
+  priceRun=null; priceBusy=false;
+  priceSave();
+  applyPrices();
+  refreshAll(); stampPrices();
+  if(btn){ btn.disabled=false; btn.textContent='Refresh prices'; }
+  const left=priceCardIds().filter(id=>!priceFresh(priceCache[id])).length;
+  if(!quiet) toast(`Prices updated for ${got} card${got===1?'':'s'}`
+    +(left>0?`. ${left} not priced by the API — those keep their built-in figure.`:'.'));
+}
+function priceSave(){
+  if(!stockDB) return;                    // no IDB: prices are per-session, never localStorage
+  try{
+    const tx=stockDB.transaction('prices','readwrite'), os=tx.objectStore('prices');
+    Object.entries(priceCache).forEach(([k,v])=>os.put(v,k));
+  }catch(e){}
+}
+async function priceBoot(){
+  if(stockDB){
+    const recs=await new Promise(res=>{
+      const out=[];
+      try{
+        const q=stockDB.transaction('prices','readonly').objectStore('prices').openCursor();
+        q.onsuccess=ev=>{ const c=ev.target.result; if(!c) return res(out); out.push([c.key,c.value]); c.continue(); };
+        q.onerror=()=>res(out);
+      }catch(e){ res(out); }
+    });
+    recs.forEach(([k,v])=>{ if(v && v.p) priceCache[k]=v; });
+  }
+  const n=Object.keys(priceCache).length;
+  if(n){ applyPrices(); refreshAll(); }
+  stampPrices();
+  /* Stale or never fetched: bring it up to date quietly in the background. ~101 calls. */
+  const newest=Object.values(priceCache).reduce((a,e)=>Math.max(a,e&&e.t||0),0);
+  if(!n || Date.now()-newest>PRICE_TTL) refreshPrices(document.getElementById('priceBtn'),true);
+}
+function stampPrices(){
+  const el=document.getElementById('priceAsOf'); if(!el) return;
+  const u=priceAsOf();
+  el.textContent = u ? ('prices as of '+u.replace(/\//g,'-')) : 'prices as built';
 }
 /* keyed by the REAL card id, so all variants of a card — and the same card in an
    artist tab — share one lookup. Deliberately separate from `state`: this is
@@ -2883,7 +3068,7 @@ loadSync();
 syncStatus(syncConfigured()?'sync ready':'not configured');
 if(syncConfigured()) gistPull(true);
 setSaveState('💾 auto-saving');
-stockBoot();
+stockBoot().then(priceBoot);
 </script>
 </body>
 </html>
