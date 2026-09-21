@@ -138,16 +138,70 @@ def set_sig(name):
     """A set name reduced to the tokens that actually identify it."""
     return {x for x in toks(name) if len(x) > 2 and x not in SET_STOP}
 
+# Some shops tag the SET CODE rather than the set name -- Everything Games writes
+# "Charizard [BS - 004/102]" and "Gengar [SWSH06 - 057/198]". set_sig() compares names,
+# so a code corroborates nothing and such a title can only match on its number.
+# The codes are the Play! Pokemon ones, which the TCG API already publishes as
+# `ptcgoCode`, so take them from there rather than hand-maintaining 140 rows.
+# The tail must look like a CARD NUMBER, or this fires on "Feebas (22) [XY - Flashfire]"
+# -- which is series-then-set-name, not code-then-number. Reading XY as a set code there
+# resolved it to the XY base set and rejected 85 genuine XY-series listings at two shops.
+SET_CODE_TAG = re.compile(
+    r'\[([A-Za-z0-9]+)\s*-\s*[A-Za-z]{0,4}\d{1,4}(?:\s*/\s*[A-Za-z]{0,4}\d{1,4})?\s*\]\s*$')
+# Codes the API does not carry a ptcgoCode for. Every one was checked against the API's
+# own set list; MEP is absent there only because it is newer than that list.
+SET_CODE_MANUAL = {
+    'SWSH01': 'swsh1', 'SWSH02': 'swsh2', 'SWSH03': 'swsh3', 'SWSH04': 'swsh4',
+    'SWSH05': 'swsh5', 'SWSH06': 'swsh6', 'SWSH07': 'swsh7', 'SWSH08': 'swsh8',
+    'SWSH09': 'swsh9', 'SWSH10': 'swsh10', 'SWSH11': 'swsh11', 'SWSH12': 'swsh12',
+    'SM11': 'sm11', 'SM12': 'sm12', 'SHF': 'swsh45', 'SMP': 'smp', 'MEP': 'mep',
+}
+SET_CODES = {}          # CODE -> set id; filled by load_set_codes()
+
+def load_set_codes(guide_sids):
+    """CODE -> set id, from the API plus the manual table, validated against the guide.
+
+    A mapping that points at a set the guide has never heard of is dead weight at best
+    and a mis-match at worst, so say so out loud rather than letting it rot silently."""
+    out = {}
+    d = get('https://api.pokemontcg.io/v2/sets?pageSize=250')
+    if d:
+        byc = collections.defaultdict(list)
+        for x in d.get('data', []):
+            c = (x.get('ptcgoCode') or '').strip().upper()
+            if c:
+                byc[c].append(x['id'])
+        # An ambiguous code identifies nothing; drop it rather than guess.
+        out.update({c: ids[0] for c, ids in byc.items() if len(ids) == 1})
+    else:
+        print('  WARNING: set list unreachable -- codes limited to the manual table',
+              flush=True)
+    out.update(SET_CODE_MANUAL)
+    unknown = sorted(c for c, sid in out.items() if sid not in guide_sids)
+    known = {c: sid for c, sid in out.items() if sid in guide_sids}
+    print(f'  set codes: {len(known)} usable'
+          f' ({len(unknown)} map to sets this guide does not carry)', flush=True)
+    for c in unknown:
+        if c in SET_CODE_MANUAL:
+            print(f'  WARNING: manual set code {c} -> {out[c]} is not in the guide',
+                  flush=True)
+    return out
+
 FORCE_FULL = {'exorgames.com', 'hobbiesville.com', 'deckoutgaming.ca'}
 
 def feed(base, label, seen, out, page_cap=100):
-    """Page one products.json feed into `out`, skipping handles already seen."""
+    """Page one products.json feed into `out`, skipping handles already seen.
+
+    Returns (added, complete). `complete` is False when the feed stopped early because a
+    page failed -- the caller must NOT cache a result built from a broken feed. Everything
+    Games sat at 11 handles for weeks because a page failed at 3,000 products, the partial
+    was cached anyway, and the cache being present meant it was never retried."""
     page, added = 1, 0
     while page <= page_cap:
         d = get(f'{base}?limit=250&page={page}')
         if d is None:
-            print(f'      {label}: page {page} failed, keeping what we have', flush=True)
-            break
+            print(f'      {label}: page {page} FAILED -- not caching this store', flush=True)
+            return added, False
         ps = d.get('products') or []
         if not ps:
             break
@@ -160,7 +214,9 @@ def feed(base, label, seen, out, page_cap=100):
             break
         page += 1
         time.sleep(PACE)
-    return added
+    if page > page_cap:
+        print(f'      {label}: hit the {page_cap}-page cap', flush=True)
+    return added, True
 
 def catalogue(host):
     """Every product we might care about, as (title, handle).
@@ -174,13 +230,22 @@ def catalogue(host):
         print('    (from cache)', flush=True)
         return [tuple(x) for x in json.loads(cf.read_text())]
     seen, out = set(), []
-    n = feed(f'https://{host}/products.json', 'full catalogue', seen, out)
+    ok = True
+    n, c = feed(f'https://{host}/products.json', 'full catalogue', seen, out)
+    ok &= c
     print(f'    full catalogue: {n}', flush=True)
     for handle, cnt in pokemon_collections(host):
-        n = feed(f'https://{host}/collections/{handle}/products.json', handle, seen, out)
+        n, c = feed(f'https://{host}/collections/{handle}/products.json', handle, seen, out)
+        ok &= c
         if n:
             print(f'    + {handle}: {n} new', flush=True)
-    cf.write_text(json.dumps(out))
+    if ok:
+        cf.write_text(json.dumps(out))
+    else:
+        # Use what we got for THIS run, but leave no cache behind: a partial snapshot that
+        # persists is indistinguishable from a complete one and is never refetched.
+        print(f'    INCOMPLETE -- using {len(out)} products for this run, not caching',
+              flush=True)
     return out
 
 # ---------- matching (mirrors the rules in master-set-binder.html) -----------
@@ -257,6 +322,24 @@ def matches(card, title, sib_ann):
     # Promos are exempt: a promo listing routinely names the main set it accompanies,
     # e.g. "Slowbro (083) [Staff] [Mega Evolution Promo]" for a card whose set is
     # "MEP Black Star Promos". Their numbers are distinctive enough to stand alone.
+    # A tagged set CODE is as good as a named set, in both directions: it corroborates
+    # when it resolves to this card's own set, and contradicts when it resolves to
+    # another one -- the same rule the name check below applies.
+    ct = SET_CODE_TAG.search(title)
+    if ct:
+        code = ct.group(1).upper()
+        coded = SET_CODES.get(code)
+        if coded == card.get('sid'):
+            return True
+        # Promo codes identify nothing. Everything Games tags every promo line "PR"
+        # -- "Eevee - BW94 [PR - BW94]" -- while the API maps PR to the Wizards promo
+        # set alone, so letting it contradict would reject promos that already matched.
+        # Same exemption the set-NAME check below makes, for the same reason.
+        promo = (code == 'PR' or code.startswith('PR-')
+                 or 'promo' in str(card.get('set', '')).lower())
+        if coded and not promo:
+            return False
+
     mine_set = set_sig(card.get('set', ''))
     if not (tt & {'promo', 'promos'}) and not (mine_set and mine_set <= tt):
         # The card's own set is not named, so a different one being named is a
@@ -340,6 +423,7 @@ def guide_cards():
 def main():
     cards = guide_cards()
     print(f'guide cards to index: {len(cards)}')
+    SET_CODES.update(load_set_codes({c.get('sid') for c in cards if c.get('sid')}))
     index = collections.defaultdict(list)
     for sid, host in STORES:
         print(f'\n[{sid}] {host}', flush=True)
