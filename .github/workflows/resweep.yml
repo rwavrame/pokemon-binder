@@ -1,0 +1,70 @@
+name: Re-sweep store catalogues
+
+# The handle index is a snapshot of what every shop had listed when it was built. Shops
+# list new singles daily, and a card with no handle at a shop is never fetched -- so it
+# reads as "sold out" rather than "not indexed". Left alone the index silently decays.
+on:
+  schedule:
+    # 04:20 UTC on the 1st and 15th -- fortnightly, off-peak for Canadian shops.
+    - cron: '20 4 1,15 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: resweep
+  cancel-in-progress: false
+
+jobs:
+  resweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350          # a cold sweep runs 2-5h; the job cap is 6h
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Prove every shop will talk to this runner before spending hours on a sweep that
+      # could otherwise overwrite a good index with an empty one.
+      - name: Canary — are all stores reachable from this runner?
+        run: python3 tools/canary.py
+
+      - name: Sweep catalogues and rebuild the index
+        run: python3 tools/build-handle-index.py
+
+      # Shops gain and lose stock; a COLLAPSE means a feed broke mid-sweep.
+      - name: Coverage guard
+        run: python3 tools/coverage-guard.py
+
+      - name: Inject handles into the guide
+        run: python3 tools/inject-handles.py
+
+      - name: Commit if anything changed
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- tools/handles.json master-set-binder.html docs/; then
+            echo "No change — every shop's listings are already indexed."
+            exit 0
+          fi
+          {
+            echo "Fortnightly store re-sweep"
+            echo
+            python3 tools/coverage-guard.py | sed -n '1,40p'
+          } > /tmp/msg.txt
+          git add tools/handles.json master-set-binder.html docs/
+          git commit -F /tmp/msg.txt
+          git push
+
+      # The catalogue cache is what makes a re-run cheap, and it is far too big to commit.
+      - name: Keep the catalogue cache for the next run
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: catalogue-cache
+          path: tools/.catalogue-cache/
+          retention-days: 30
