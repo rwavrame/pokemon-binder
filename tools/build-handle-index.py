@@ -68,6 +68,74 @@ def get(url, tries=6):
             time.sleep(2 + 2 * a)
     return None
 
+def get_text(url, tries=4):
+    """Same retry policy as get(), for XML rather than JSON."""
+    for a in range(tries):
+        r = subprocess.run(['curl', '-sS', '-g', '-m', '60', '-L', '-w', '\n%{http_code}',
+                            '-A', 'Mozilla/5.0', url], capture_output=True, text=True)
+        body, _, code = r.stdout.rpartition('\n')
+        code = code.strip()
+        if code == '429':
+            wait = 10 * (a + 1)
+            print(f'      429 — backing off {wait}s', flush=True)
+            time.sleep(wait)
+            continue
+        if code == '200' and body.lstrip().startswith('<'):
+            return body
+        time.sleep(2 + 2 * a)
+    return None
+
+
+SITEMAP_LOC = re.compile(r'<loc>\s*([^<\s]+)\s*</loc>')
+SITEMAP_URL = re.compile(
+    r'<url>(.*?)</url>', re.S)
+SITEMAP_PROD = re.compile(r'<loc>\s*https?://[^<]*?/products/([^<?\s]+)\s*</loc>')
+SITEMAP_TITLE = re.compile(r'<image:title>\s*(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?\s*</image:title>', re.S)
+
+
+def sitemap_feed(host, seen, out):
+    """Every product in the store, from its sitemap.
+
+    products.json is hard-capped by Shopify at 100 pages / 25,000 products. Hobbiesville
+    carries ~203,000 products, so that cap was hiding 82% of the store and 1,518 handles
+    went missing with it -- the coverage guard is what caught it. The sitemap has no cap
+    and carries the product title in <image:title>, which is all the matcher needs.
+
+    Returns (added, complete). Titles come from the image block, so a product with no
+    image yields none; we fall back to the handle, which the matcher can still read.
+    """
+    idx = get_text(f'https://{host}/sitemap.xml')
+    if idx is None:
+        print('      sitemap: unreachable', flush=True)
+        return 0, False
+    maps = [u.replace('&amp;', '&') for u in SITEMAP_LOC.findall(idx)
+            if 'sitemap_products' in u]
+    if not maps:
+        return 0, True                  # no product sitemap is not a failure
+    added = 0
+    for i, u in enumerate(maps, 1):
+        x = get_text(u)
+        if x is None:
+            print(f'      sitemap {i}/{len(maps)} FAILED -- not caching this store',
+                  flush=True)
+            return added, False
+        for block in SITEMAP_URL.findall(x):
+            hm = SITEMAP_PROD.search(block)
+            if not hm:
+                continue
+            h = hm.group(1)
+            if h in seen:
+                continue
+            tm = SITEMAP_TITLE.search(block)
+            title = (tm.group(1).strip() if tm else h.replace('-', ' '))
+            seen.add(h)
+            out.append((title, h))
+            added += 1
+        time.sleep(PACE)
+    print(f'    + sitemap: {added} new (from {len(maps)} files)', flush=True)
+    return added, True
+
+
 SKIP_COLL = ('japan', 'korean', 'chinese', 'sealed', 'graded', 'playmat', 'plush',
              'booster', 'box', 'bundle', 'tin', 'etb', 'preorder', 'pre-order',
              'supplies', 'sleeve', 'binder', 'deck-box')
@@ -99,9 +167,15 @@ def pokemon_collections(host):
             continue
         if any(w in nm for w in SKIP_COLL):
             continue
+        if not (c.get('products_count') or 0):
+            continue                     # an empty collection costs a request for nothing
         picked.append((c['handle'], c.get('products_count') or 0))
     picked.sort(key=lambda x: -x[1])
-    return picked[:40]
+    # Hobbiesville carries 107 Pokemon collections. Taking only the biggest 40 left the
+    # older sets unfetched, and with their full catalogue already truncated at Shopify's
+    # 25,000-product cap those cards were reachable nowhere else -- 1,525 handles vanished
+    # and the coverage guard caught it. Take the lot; the small ones are one page each.
+    return picked[:200]
 
 def pokemon_collection(host):
     d = get(f'https://{host}/collections.json?limit=250')
@@ -239,6 +313,10 @@ def catalogue(host):
         ok &= c
         if n:
             print(f'    + {handle}: {n} new', flush=True)
+    # Last, and the only source with no cap: the sitemap. Runs after the JSON feeds so
+    # their richer titles win for any product both sources carry.
+    n, c = sitemap_feed(host, seen, out)
+    ok &= c
     if ok:
         cf.write_text(json.dumps(out))
     else:
