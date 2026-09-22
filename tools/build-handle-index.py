@@ -419,6 +419,13 @@ def matches(card, title, sib_ann):
             return False
 
     mine_set = set_sig(card.get('set', ''))
+    # A card whose set IS a named sub-set (Classic Collection) must match a listing that
+    # names it. Without this, a bare "Charizard 4" or "Pikachu 033/128" from the base set
+    # or the main 30th run gets grabbed by the Classic Collection reprint, which shops
+    # always label "... Classic Collection". Number-prefixed sub-sets (GG/TG) already
+    # self-identify; Classic Collection has no prefix, so require the word.
+    if 'classic' in mine_set and 'classic' not in tt:
+        return False
     if not (tt & {'promo', 'promos'}) and not (mine_set and mine_set <= tt):
         # The card's own set is not named, so a different one being named is a
         # contradiction. Ignore a set that is present only because the card is called
