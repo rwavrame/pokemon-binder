@@ -95,6 +95,10 @@ body.pg4 .pocket .price,body.pg4 .pocket .num{font-size:11px;bottom:40px}
 .pocket.owned .foot .setline{color:#8fb8a0}
 .pocket .badge{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:26px;opacity:0;transition:opacity .2s;text-shadow:0 2px 8px #000;pointer-events:none}
 .pocket.owned .badge,.pocket.ordered .badge{opacity:.95}
+.pocket.omitted{opacity:.32;border-style:dotted;border-color:rgba(255,140,90,.5);filter:grayscale(.6)}
+.pocket.omitted:hover{opacity:.6}
+.pocket .omit-flag{position:absolute;top:4px;left:5px;font-size:15px;text-shadow:0 1px 4px #000;pointer-events:none}
+#showOmit.on{background:#3a2a15;border-color:#ffb347;color:#ffcf8a}
 .pocket .num{position:absolute;bottom:33px;left:5px;font-size:9px;color:#66779e;background:rgba(8,10,22,.8);padding:1px 4px;border-radius:3px}
 .pocket.empty{cursor:default;opacity:.25;background:repeating-linear-gradient(45deg,#0d1224,#0d1224 7px,#111832 7px,#111832 14px);border-style:dashed}
 .pocket.empty:hover{transform:none;border-color:rgba(120,140,180,.18);box-shadow:none;opacity:.25}
@@ -356,6 +360,9 @@ body.pg4 .pocket .foot .stockline{font-size:9.5px}
       <option value="reverseHolofoil">Reverse Holo</option>
       <option value="vintage">1st Ed / Unlimited</option>
     </select>
+    <button id="showOmit" onclick="setShowOmitted(!showOmitted)"
+            title="Show the printings you've excluded from this tab, dimmed, so you can restore any"
+            style="display:none"></button>
     <span class="stat" style="white-space:nowrap">C$ / US$
       <input type="number" id="fxRate" step="0.001" min="0.01" value="1.374"
              title="USD→CAD rate used for every price shown"
@@ -747,6 +754,26 @@ function toggleSpecies(sp){
   try{localStorage.setItem('excludedSpecies_v1',JSON.stringify([...excluded]));}catch(e){}
   refreshAll();
 }
+/* Per-printing opt-out. `omitted` holds pocket keys the user has decided not to collect;
+   they drop out of the counts, checklist and shopping list but keep their owned/ordered
+   mark in state.status, so restoring one is lossless. Same shape as species exclusion,
+   one level down. `showOmitted` reveals them (dimmed) in the binder so they can be
+   brought back. */
+let omitted=new Set(), showOmitted=false;
+function isOmitted(k){return omitted.has(k)}
+function saveOmitted(){ try{localStorage.setItem('omittedCards_v1',JSON.stringify([...omitted]));}catch(e){} }
+function toggleOmit(k){
+  omitted.has(k)?omitted.delete(k):omitted.add(k);
+  saveOmitted(); refreshAll();
+}
+function setShowOmitted(on){
+  showOmitted=!!on;
+  try{localStorage.setItem('showOmitted_v1',showOmitted?'1':'0');}catch(e){}
+  refreshAll();
+}
+function omittedCount(gid){
+  try{ return pockets(gid).filter(p=>!p.custom && isOmitted(p.key)).length; }catch(e){ return 0; }
+}
 // Some cards carry the Pokemon's name but are TRAINER cards (e.g. "Ampharos
 // Spirit Link", "Slowbro Spirit Link"). Name-matching swept them in with the
 // Pokemon cards; they belong with the other non-Pokemon cards instead.
@@ -788,11 +815,21 @@ function pockets(gid){
 function statusOf(k){return state.status[k]||''}
 function cycle(k){
   const s=statusOf(k);
+  /* A single click steps missing->ordered->owned->missing. The owned->missing step is
+     the one people trip over -- one stray click wipes an owned mark -- so make that
+     transition, and only that one, ask first. The detail panel's Missing button stays
+     unprompted for a deliberate change of mind. */
+  if(s==='owned'){
+    const p=pockets(curTab).find(x=>x.key===k);
+    const nm=p?`${p.c.n} — ${p.v.l}`:'This card';
+    if(!confirm(`${nm} is marked owned.\nChange it back to missing?`)) return;
+  }
   state.status[k] = s===''?'ordered' : s==='ordered'?'owned' : '';
   if(!state.status[k]) delete state.status[k];
   save(); refreshAll();
 }
 function matches(p){
+  if(isOmitted(p.key) && !showOmitted) return false;   // excluded printings are hidden
   const q=document.getElementById('q').value.trim().toLowerCase();
   if(q){
     const hay=(p.c.n+' '+p.c.set+' '+p.c.a+' '+p.c.r+' '+p.v.l+' '+p.c.num).toLowerCase();
@@ -980,6 +1017,17 @@ function pocketHtml(p){
   const img=p.c.img
     ? `<img class="card-img" loading="lazy" src="${p.c.img}" alt="">`
     : `<div class="noimg"><img src="${spriteUrl(p.dex||0)}" alt=""><span>No image<br>${p.c.set}</span></div>`;
+  /* An excluded printing only appears here when Show excluded is on. Clicking it puts it
+     back rather than cycling status, so it reads as "click to restore". */
+  if(isOmitted(p.key)){
+    return `<div class="pocket ${st} omitted" data-k="${p.key}" title="Excluded from your collection — click to restore" onclick="toggleOmit('${p.key}')" oncontextmenu="showCard('${p.key}');return false">
+    ${img}
+    <div class="vtag ${tagClass(p)}">${p.v.s}</div>
+    <div class="omit-flag" title="Excluded — click to restore">🚫</div>
+    <div class="num">${p.c.num}${p.c.tot?'/'+p.c.tot:''}</div>
+    <div class="foot"><b>${p.c.n}</b><span class="setline">Excluded — click to restore</span></div>
+  </div>`;
+  }
   return `<div class="pocket ${st}" data-k="${p.key}" onclick="cycle('${p.key}')" oncontextmenu="showCard('${p.key}');return false">
     ${img}
     <div class="vtag ${tagClass(p)}">${p.v.s}</div>
@@ -1023,6 +1071,9 @@ function showCard(key){
       <button onclick="setSt('${key}','owned')">✅ Owned</button>
       <button onclick="setSt('${key}','ordered')">📦 Ordered</button>
       <button onclick="setSt('${key}','')">⬜ Missing</button>
+      ${p.custom?'':(isOmitted(key)
+        ? `<button onclick="toggleOmit('${key}');closeModal('cardModal')" style="color:#3ddc97">↩ Include this printing</button>`
+        : `<button onclick="toggleOmit('${key}');closeModal('cardModal')" style="color:#ffb347" title="Stop collecting this printing — removes it from counts, checklist and shopping list, without losing its status">🚫 Exclude this printing</button>`)}
       ${p.custom?`<button onclick="delCustom(${p.ci})" style="color:#ff8888">Delete pocket</button>`:
         `<a href="https://www.tcgplayer.com/search/pokemon/product?q=${encodeURIComponent(p.c.n+' '+p.c.set+' '+p.c.num)}" target="_blank"><button>Search TCGplayer</button></a>`}
       <button onclick="closeModal('cardModal')">Close</button>
@@ -2020,10 +2071,11 @@ function renderChecklist(){
   let html=`<h2>${g.title} master set — printable checklist</h2>`;
   const order=[...activeSpecies(g),'cameos','extras'];
   const _ord=activeSpecies(g);
+  const _clOk=p=>matches(p)&&!isOmitted(p.key);   // the printable list is always clean of excluded printings
   order.forEach(sp=>{
-    let list=pockets(curTab).filter(p=>p.sp===sp).filter(matches);
+    let list=pockets(curTab).filter(p=>p.sp===sp).filter(_clOk);
     if(cameoMode==='inline' && sp!=='cameos' && sp!=='extras')
-      list=list.concat(pockets(curTab).filter(p=>p.sp==='cameos'&&p.owner===sp).filter(matches));
+      list=list.concat(pockets(curTab).filter(p=>p.sp==='cameos'&&p.owner===sp).filter(_clOk));
     if(cameoMode==='inline' && sp==='cameos')
       list=list.filter(p=>!_ord.includes(p.owner));
     if(sp==='cameos'){
@@ -2337,6 +2389,7 @@ function shopScope(){
   visibleGroups().forEach(g=>{
     pockets(g.id).forEach(p=>{
       if(p.custom) return;
+      if(isOmitted(p.key)) return;              // excluded: not being collected
       if(statusOf(p.key)!=='') return;          // owned or ordered: not wanted
       out.push({g,p});
     });
@@ -2677,7 +2730,7 @@ async function sweepShopping(btn,force){
 function totalPages(){
   let n=0;
   DATA.groups.forEach(g=>{
-    const ps=pockets(g.id);
+    const ps=pockets(g.id).filter(p=>!isOmitted(p.key));
     [...g.species,'cameos'].forEach(sp=>{
       const c=ps.filter(p=>p.sp===sp).length;
       if(c) n+=Math.ceil(c/PAGE);
@@ -2687,7 +2740,7 @@ function totalPages(){
 }
 function updateStats(){
   const fp=document.getElementById('footPages'); if(fp) fp.textContent=totalPages();
-  const ps=pockets(curTab);
+  const ps=pockets(curTab).filter(p=>!isOmitted(p.key));   // excluded printings are not part of the set
   const own=ps.filter(p=>statusOf(p.key)==='owned');
   const ord=ps.filter(p=>statusOf(p.key)==='ordered');
   const miss=ps.filter(p=>!statusOf(p.key));
@@ -2698,6 +2751,12 @@ function updateStats(){
   document.getElementById('stPct').innerHTML=`<b>${pct}%</b>`;
   document.getElementById('stVal').innerHTML=`Owned <b>${money(sum(own))}</b>`;
   document.getElementById('stCost').innerHTML=`To finish <b>${money(sum(miss))}</b>`;
+  const nOmit=omittedCount(curTab), sb=document.getElementById('showOmit');
+  if(sb){
+    sb.style.display = nOmit ? '' : 'none';
+    sb.textContent = showOmitted ? `Hide excluded (${nOmit})` : `Show excluded (${nOmit})`;
+    sb.classList.toggle('on', showOmitted);
+  }
 }
 
 function refreshAll(){
@@ -3072,6 +3131,9 @@ try{oneOfEach=localStorage.getItem('oneOfEach_v1')==='1';}catch(e){}
 document.getElementById('oneEach').classList.toggle('on',oneOfEach);
 try{const _ex=JSON.parse(localStorage.getItem('excludedSpecies_v1')||'[]');
      if(Array.isArray(_ex)) excluded=new Set(_ex);}catch(e){}
+try{const _om=JSON.parse(localStorage.getItem('omittedCards_v1')||'[]');
+     if(Array.isArray(_om)) omitted=new Set(_om);}catch(e){}
+try{ showOmitted=localStorage.getItem('showOmitted_v1')==='1'; }catch(e){}
 try{const _fx=parseFloat(localStorage.getItem('fxRate_v1')); if(isFinite(_fx)&&_fx>0) FX=_fx;}catch(e){}
 try{const _d=JSON.parse(localStorage.getItem('storeDisc_v1')||'{}');
     if(_d&&typeof _d==='object') STORE_DISC=_d;}catch(e){}
