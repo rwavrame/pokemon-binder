@@ -193,6 +193,29 @@ body.pg4 .pocket .price,body.pg4 .pocket .num{font-size:11px;bottom:40px}
 .shop-sort{font-size:12px;color:#8fa0c8;display:inline-flex;align-items:center;gap:6px;margin-right:4px}
 .shop-sort select,.shop-sort input{padding:5px 7px;background:#1e1e40;border:1px solid #333;color:#ddd;border-radius:6px;font-size:12px}
 .shop-sort input[type=checkbox]{padding:0;width:14px;height:14px;accent-color:#3ddc97}
+/* Incoming (ordered) view */
+.ord-store{margin-bottom:16px}
+.ord-store-head{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:7px 10px;background:#161634;border:1px solid #2a2a56;border-radius:8px 8px 0 0;position:sticky;top:var(--stickytop,36px);z-index:2}
+.ord-store-head b{color:#dfe6ff;font-size:13px}
+.ord-store-head span{color:#8f9ac4;font-size:11px;white-space:nowrap}
+.ord-row{display:grid;grid-template-columns:1fr 70px 150px 120px 92px 34px;gap:8px;align-items:center;
+  padding:6px 10px;border:1px solid #20203f;border-top:none;background:#101026;font-size:12px}
+.ord-row:last-child{border-radius:0 0 8px 8px}
+.ord-card{display:flex;align-items:center;gap:8px;min-width:0}
+.ord-card img{width:30px;height:42px;object-fit:cover;border-radius:3px;flex:none}
+.ord-card b{color:#e6ecff;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ord-card .ord-sub{color:#7d88ad;font-size:10.5px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ord-price{text-align:right;color:#9fb4e6}
+.ord-store-in{padding:5px 7px;background:#1e1e40;border:1px solid #333;color:#ddd;border-radius:6px;font-size:11px;width:100%}
+.stage-pill{padding:5px 8px;border-radius:14px;font-size:11px;font-weight:700;border:1px solid;cursor:pointer;white-space:nowrap}
+.stage-pill.ordered{background:#3a2a15;border-color:#ffb347;color:#ffcf8a}
+.stage-pill.shipped{background:#13293f;border-color:#4a9eff;color:#9fd0ff}
+.ord-arr{padding:5px 8px;border-radius:6px;font-size:11px;cursor:pointer;background:#13331f;border:1px solid #2e7d4f;color:#7fe0a6;white-space:nowrap}
+.ord-go{padding:5px 0;border-radius:6px;font-size:13px;cursor:pointer;background:#1e1e40;border:1px solid #333;color:#9fb4e6}
+@media(max-width:620px){.ord-row{grid-template-columns:1fr 60px;grid-auto-flow:row}
+  .ord-row .ord-store-in,.ord-row .stage-pill,.ord-row .ord-arr,.ord-row .ord-go{grid-column:1/-1}}
+.pocket.flash{animation:pktflash 1.6s ease-out}
+@keyframes pktflash{0%,30%{box-shadow:0 0 0 3px #ffcf6a,0 0 18px #ffcf6a}100%{box-shadow:none}}
 .shop-filter{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:11px;
   padding-top:10px;border-top:1px solid #262650}
 .shop-filter .lnk{background:none;border:none;color:#7ea6ff;cursor:pointer;font-size:12px;text-decoration:underline;padding:0}
@@ -385,6 +408,7 @@ body.pg4 .pocket .foot .stockline{font-size:9.5px}
     <button id="viewList">Checklist</button>
     <button id="viewPh">Placeholders</button>
     <button id="viewShop" title="Everything you still need that is in stock right now, grouped by store">🛒 Shopping list</button>
+    <button id="viewOrdered" title="Every card you've marked Ordered, across all sets — grouped by store, with a shipping stage">📦 Incoming</button>
     <span class="sep"></span>
     <button id="oneEach" title="Collapse every card to a single pocket — one of each unique artwork, dropping reverse holo, 1st Edition and other duplicate printings">1 per card</button>
     <button onclick="window.print()">Print</button>
@@ -409,7 +433,9 @@ body.pg4 .pocket .foot .stockline{font-size:9.5px}
   <div id="checklist"></div>
   <div id="placeholders"></div>
   <div id="shoplist"></div>
+  <div id="ordered"></div>
 </main>
+<datalist id="storeDL"></datalist>
 
 <footer>
   Card data &amp; images from the <a href="https://pokemontcg.io" target="_blank">Pokémon TCG API</a> (English-language sets only) ·
@@ -597,7 +623,7 @@ DATA.cameos['me4'] = [];
 
 const STORAGE='masterBinder_v2';
 const CUSTOM='masterBinderCustom_v2';
-let state={status:{},notes:{}};
+let state={status:{},notes:{},track:{}};
 let custom={};
 let curTab=DATA.groups[0].id;
 let view='binder';
@@ -606,7 +632,8 @@ let PAGE=9;   // pockets per binder page (4 / 9 / 16)
 
 /* ---------------- persistence: localStorage + optional real file ---------------- */
 function load(){
-  try{const s=localStorage.getItem(STORAGE); if(s) state=Object.assign({status:{},notes:{}},JSON.parse(s));}catch(e){}
+  try{const s=localStorage.getItem(STORAGE); if(s) state=Object.assign({status:{},notes:{},track:{}},JSON.parse(s));}catch(e){}
+  if(!state.track) state.track={};
   try{const c=localStorage.getItem(CUSTOM); if(c) custom=JSON.parse(c);}catch(e){}
 }
 let saveTimer=null, lsOk=true;
@@ -638,7 +665,7 @@ function save(skipSync){
 async function writeFile(){
   try{
     const w=await fileHandle.createWritable();
-    await w.write(JSON.stringify({v:2,saved:new Date().toISOString(),status:state.status,notes:state.notes,custom},null,1));
+    await w.write(JSON.stringify({v:2,saved:new Date().toISOString(),status:state.status,notes:state.notes,track:state.track,custom},null,1));
     await w.close();
     setSaveState('🔗 saved to file');
   }catch(e){ setSaveState('⚠️ file write failed'); }
@@ -826,6 +853,7 @@ function cycle(k){
   }
   state.status[k] = s===''?'ordered' : s==='ordered'?'owned' : '';
   if(!state.status[k]) delete state.status[k];
+  if(state.status[k]!=='ordered' && state.track[k]) delete state.track[k];   // no stale tracking
   save(); refreshAll();
 }
 function matches(p){
@@ -848,6 +876,7 @@ function matches(p){
 
 /* ---------------- rendering ---------------- */
 function spriteUrl(dex){return `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${dex}.png`}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 /* Source prices are TCGplayer MARKET values in USD. They stay in USD in the
    data; conversion happens only at display time so the rate can be changed
    without rebuilding anything. */
@@ -1080,7 +1109,7 @@ function showCard(key){
     </div>`;
   document.getElementById('cardModal').classList.add('open');
 }
-function setSt(k,v){ if(v) state.status[k]=v; else delete state.status[k]; save(); closeModal('cardModal'); refreshAll(); }
+function setSt(k,v){ if(v) state.status[k]=v; else delete state.status[k]; if(v!=='ordered' && state.track[k]) delete state.track[k]; save(); closeModal('cardModal'); refreshAll(); }
 function closeModal(id){document.getElementById(id).classList.remove('open')}
 
 /* ── Live Canadian stock ────────────────────────────────────────────────────
@@ -2766,6 +2795,7 @@ function refreshAll(){
   if(view==='binder'){renderBinder(); renderChecklist();}
   else {renderChecklist(); renderBinder();}
   if(view==='shop') renderShopping();   // FX and store discounts must repaint it
+  if(view==='ordered') renderOrdered();
 }
 
 /* ---------------- orphaned-mark detector ----------------
@@ -2833,7 +2863,7 @@ function syncStatus(msg,cls){
   if(b) b.classList.toggle('on', syncConfigured());
 }
 function snapshot(){
-  return {v:2,saved:new Date().toISOString(),status:state.status,notes:state.notes,custom};
+  return {v:2,saved:new Date().toISOString(),status:state.status,notes:state.notes,track:state.track,custom};
 }
 async function gistCall(method, body){
   // GitHub answers authenticated GETs with Cache-Control: private, max-age=60,
@@ -2879,6 +2909,7 @@ async function gistPull(silent, force){
     const rt=Date.parse(remote.saved||0)||0, lt=Date.parse(state.saved||0)||0;
     if(rt>lt || force){
       state.status=Object.assign({},remote.status||{});
+      state.track=Object.assign({},remote.track||{});
       if(remote.custom) custom=JSON.parse(JSON.stringify(remote.custom));
       state.saved=remote.saved; sync.lastPull=rt; saveSync(); save(true); refreshAll();
       syncStatus('pulled '+new Date(rt).toLocaleTimeString(),'ok');
@@ -2908,6 +2939,7 @@ async function gistMerge(){
     const f=(g.files||{})[GIST_FILE];
     const remote=f&&f.content?JSON.parse(f.content):{status:{}};
     state.status=Object.assign({},remote.status||{},state.status);   // union, local wins ties
+    state.track=Object.assign({},remote.track||{},state.track);
     if(remote.custom) custom=Object.assign({},remote.custom,custom);
     save(true); refreshAll(); await gistPush(true);
     toast('Merged both devices and pushed the result.');
@@ -2943,7 +2975,7 @@ function forgetSync(){
 /* export / import */
 function expJson(){
   dl('master-binder-progress.json','application/json',
-     JSON.stringify({v:2,saved:new Date().toISOString(),status:state.status,notes:state.notes,custom},null,1));
+     JSON.stringify({v:2,saved:new Date().toISOString(),status:state.status,notes:state.notes,track:state.track,custom},null,1));
 }
 function expCsv(){
   let rows=[['Group','Pokemon','Card','Set','Number','Year','Rarity','Variant','Inferred',
@@ -2979,9 +3011,11 @@ function applyImport(mode){
   const d=pendingImport; if(!d) return;
   if(mode==='replace'){
     state.status = Object.assign({}, d.status||{});
+    state.track = Object.assign({}, d.track||{});
     custom = JSON.parse(JSON.stringify(d.custom||{}));
   }else{
     state.status = Object.assign(state.status, d.status||{});
+    state.track = Object.assign(state.track||{}, d.track||{});
     if(d.custom) custom = Object.assign(custom, d.custom);
   }
   pendingImport=null;
@@ -3082,26 +3116,144 @@ function syncStickyTop(){
   if(h) document.documentElement.style.setProperty('--stickytop',Math.round(h.getBoundingClientRect().height)+'px');
 }
 addEventListener('resize',syncStickyTop);
+
+/* ── Incoming: every ordered card across all sets, grouped by store ─────────── */
+let orderedFind='';
+/* All pockets marked ordered, regardless of the binder's view filters (1-per-card,
+   excluded species, excluded printings) — an order is an order. Reuses the
+   save/restore trick from allPocketKeys() to see the unfiltered set. */
+function orderedScope(){
+  const out=[];
+  const savedTab=curTab, savedEx=new Set(excluded), savedOne=oneOfEach, savedOm=showOmitted;
+  excluded=new Set(); oneOfEach=false; showOmitted=true;
+  DATA.groups.forEach(g=>pockets(g.id).forEach(p=>{
+    if(!p.custom && statusOf(p.key)==='ordered') out.push({g,p});
+  }));
+  excluded=savedEx; oneOfEach=savedOne; showOmitted=savedOm; curTab=savedTab;
+  return out;
+}
+function trackOf(k){ return state.track[k]||{} }
+function setTrackStore(k,v){
+  v=(v||'').trim();
+  const t=Object.assign({},state.track[k]); if(v) t.store=v; else delete t.store;
+  if(Object.keys(t).length) state.track[k]=t; else delete state.track[k];
+  save(true); renderOrdered();
+}
+function setTrackStage(k,v){
+  const t=Object.assign({},state.track[k]);
+  if(v==='shipped') t.stage='shipped'; else delete t.stage;   // 'ordered' is the default, store nothing
+  if(Object.keys(t).length) state.track[k]=t; else delete state.track[k];
+  save(true); renderOrdered();
+}
+function markArrived(k){
+  state.status[k]='owned'; delete state.track[k];
+  save(); renderOrdered(); updateStats();
+  toast('Marked arrived — now in your collection.');
+}
+function gotoCard(k){
+  const row=orderedScope().find(x=>x.p.key===k); if(!row) return;
+  setTab(row.g.id); setView('binder');
+  setTimeout(()=>{
+    const el=document.querySelector(`.pocket[data-k="${CSS.escape(k)}"]`);
+    if(el){ el.scrollIntoView({block:'center',behavior:'smooth'}); el.classList.add('flash'); setTimeout(()=>el.classList.remove('flash'),1600); }
+  },80);
+}
+function orderedMatches(p,store){
+  const q=orderedFind.trim().toLowerCase(); if(!q) return true;
+  return (p.c.n+' '+p.c.set+' '+p.c.num+' '+p.v.l+' '+store).toLowerCase().includes(q);
+}
+function renderOrdered(){
+  // keep the store datalist in sync with the shops we know, plus any custom stores typed
+  const known=[...STORES.map(s=>s.name)];
+  const typed=[...new Set(Object.values(state.track).map(t=>t&&t.store).filter(Boolean))];
+  document.getElementById('storeDL').innerHTML=[...new Set([...known,...typed])]
+    .map(n=>`<option value="${esc(n)}">`).join('');
+
+  const scope=orderedScope();
+  const el=document.getElementById('ordered');
+  if(!scope.length){
+    el.innerHTML=`<div class="shop-head"><h2>📦 Nothing on the way</h2>
+      <div class="sub">Cards you mark <b>📦 Ordered</b> — click a pocket once past Missing — show up here,
+      grouped by the store you ordered them from, so you can track what's incoming.</div></div>`;
+    return;
+  }
+  // group by store ('' => Unassigned, sorted first)
+  const groups={};
+  scope.forEach(({g,p})=>{ const st=(trackOf(p.key).store||''); (groups[st]=groups[st]||[]).push({g,p}); });
+  const names=Object.keys(groups).sort((a,b)=> a===''? -1 : b===''? 1 : a.localeCompare(b));
+
+  const totN=scope.length;
+  const totVal=scope.reduce((t,{p})=>t+(p.v.p||0),0);
+  const totShipped=scope.filter(({p})=>trackOf(p.key).stage==='shipped').length;
+
+  let html=`<div class="shop-head">
+    <h2>📦 ${totN} card${totN===1?'':'s'} incoming</h2>
+    <div class="sub">Everything marked Ordered across all ${DATA.groups.length} sets, grouped by store.
+      <b>${totShipped}</b> shipped · <b>${totN-totShipped}</b> not yet · total value <b>${money(totVal)}</b>.
+      Set the store and move each card Ordered → Shipped as it travels; click <b>✅ Arrived</b> when it lands
+      and it moves into your collection. <b>↗</b> jumps to the card in its binder.</div>
+    <div class="shop-filter"><label class="shop-sort">Find
+      <input type="search" id="ordQ" value="${esc(orderedFind)}" placeholder="card, set, number or store"
+             oninput="orderedFind=this.value;renderOrdered()"></label></div>
+  </div>`;
+
+  names.forEach(store=>{
+    let rows=groups[store].filter(({p})=>orderedMatches(p,store));
+    if(!rows.length) return;
+    rows.sort((a,b)=>(a.p.c.set||'').localeCompare(b.p.c.set||'')||String(a.p.c.num).localeCompare(String(b.p.c.num)));
+    const shipped=rows.filter(({p})=>trackOf(p.key).stage==='shipped').length;
+    const val=rows.reduce((t,{p})=>t+(p.v.p||0),0);
+    const label=store||'Unassigned — set a store';
+    html+=`<div class="ord-store">
+      <div class="ord-store-head"><b>${esc(label)}</b>
+        <span>${rows.length} card${rows.length===1?'':'s'} · ${shipped} shipped · ${money(val)}</span></div>`;
+    rows.forEach(({g,p})=>{
+      const t=trackOf(p.key), stage=t.stage==='shipped'?'shipped':'ordered';
+      const img=p.c.img?`<img loading="lazy" src="${p.c.img}" alt="">`:'';
+      html+=`<div class="ord-row">
+        <div class="ord-card">${img}<div><b>${esc(p.c.n)}</b>
+          <span class="ord-sub">${esc(p.c.set)} · ${esc(String(p.c.num))}${p.c.tot?'/'+p.c.tot:''} · ${esc(p.v.l)} · ${esc(g.title)}</span></div></div>
+        <div class="ord-price">${p.v.p!=null?money(p.v.p):'—'}</div>
+        <input class="ord-store-in" list="storeDL" value="${esc(t.store||'')}" placeholder="which store?"
+               onchange="setTrackStore('${p.key}',this.value)">
+        <button class="stage-pill ${stage}" title="Click to toggle Ordered / Shipped"
+                onclick="setTrackStage('${p.key}','${stage==='shipped'?'ordered':'shipped'}')">${stage==='shipped'?'🚚 Shipped':'🧾 Ordered'}</button>
+        <button class="ord-arr" onclick="markArrived('${p.key}')" title="It's here — move it into your collection">✅ Arrived</button>
+        <button class="ord-go" onclick="gotoCard('${p.key}')" title="Show this card in its binder">↗</button>
+      </div>`;
+    });
+    html+=`</div>`;
+  });
+  const wasFind=document.activeElement&&document.activeElement.id==='ordQ';
+  const caret=wasFind?document.activeElement.selectionStart:0;
+  el.innerHTML=html;
+  if(wasFind){ const q=document.getElementById('ordQ'); if(q){ q.focus(); try{q.setSelectionRange(caret,caret);}catch(e){} } }
+}
+
 function setView(v){
   view=v;
   document.getElementById('viewBinder').classList.toggle('on',v==='binder');
   document.getElementById('viewList').classList.toggle('on',v==='list');
   document.getElementById('viewPh').classList.toggle('on',v==='ph');
   document.getElementById('viewShop').classList.toggle('on',v==='shop');
+  document.getElementById('viewOrdered').classList.toggle('on',v==='ordered');
   document.getElementById('binder').style.display=v==='binder'?'block':'none';
   document.getElementById('checklist').style.display=v==='list'?'block':'none';
   document.getElementById('placeholders').style.display=v==='ph'?'block':'none';
   document.getElementById('shoplist').style.display=v==='shop'?'block':'none';
+  document.getElementById('ordered').style.display=v==='ordered'?'block':'none';
   document.getElementById('notes').style.display=v==='binder'?'block':'none';
   document.body.classList.toggle('printing-ph',v==='ph');
   document.body.classList.toggle('printing-shop',v==='shop');
   if(v==='ph') renderPlaceholders();
   if(v==='shop') renderShopping();
+  if(v==='ordered') renderOrdered();
   syncStickyTop();
 }
 document.getElementById('cameoMode').onchange=e=>setCameoMode(e.target.value);
 document.getElementById('pageSize').onchange=e=>setPageSize(+e.target.value);
 document.getElementById('viewShop').onclick=()=>setView('shop');
+document.getElementById('viewOrdered').onclick=()=>setView('ordered');
 document.getElementById('viewBinder').onclick=()=>setView('binder');
 document.getElementById('viewList').onclick=()=>setView('list');
 document.getElementById('viewPh').onclick=()=>setView('ph');
